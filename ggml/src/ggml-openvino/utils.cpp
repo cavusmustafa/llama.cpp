@@ -92,6 +92,9 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         core.set_property(ov::cache_dir(cache_dir));
     }
 
+    // Append or update profiling option
+    config[ov::enable_profiling.name()] = true;
+
     static std::unordered_map<struct ggml_cgraph*, std::shared_ptr<ov::InferRequest>> infer_request_cache;
     static std::unordered_map<struct ggml_cgraph*, std::vector<std::string>> ov_input_names_cache;
     static std::unordered_map<struct ggml_cgraph*, std::vector<std::string>> ov_output_names_cache;
@@ -205,6 +208,25 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
     infer_request.infer();
     auto infer_end_time = ggml_time_us();
+
+    if (getenv("GGML_OPENVINO_PERF_COUNTS")) {
+        const auto perf_counts = infer_request.get_profiling_info();
+        GGML_LOG_INFO("OpenVINO Layer-wise Performance (µs):\n");
+        for (const auto& info : perf_counts) {
+            const char* status_str = "UNKNOWN";
+            switch (info.status) {
+                case ov::ProfilingInfo::Status::EXECUTED: status_str = "EXECUTED"; break;
+                case ov::ProfilingInfo::Status::NOT_RUN: status_str = "NOT_EXECUTED"; break;
+                case ov::ProfilingInfo::Status::OPTIMIZED_OUT: status_str = "OPTIMIZED_OUT"; break;
+            }
+
+            GGML_LOG_INFO("  - %-40s | Exec Type: %-15s | Status: %-14s | Time: %6ld µs\n",
+                          info.node_name.c_str(),
+                          info.exec_type.c_str(),
+                          status_str,
+                          info.real_time);
+        }
+    }
 
     auto gguf_tensor_addrs = get_ggml_graph_output_dst(ggml_decoder);
     for (size_t i = 0; i < ov_output_names.size(); i++) {
