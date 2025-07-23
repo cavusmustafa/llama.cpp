@@ -26,6 +26,8 @@
 #include "openvino/frontend.hpp"
 #include "openvino/input_model.hpp"
 
+int infer_count = 0;
+
 ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string& name) {
     const auto* ggml_tensor = ggml_decoder->get_input_ggml_tensor(name);
     auto* input_data = ggml_tensor->data;
@@ -65,7 +67,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
     static std::string device = getenv("GGML_OPENVINO_DEVICE") ? getenv("GGML_OPENVINO_DEVICE") : "";
     if (device.empty()) {
-        const std::vector<std::string> preferred_device = { "GPU", "CPU", "NPU" };
+        const std::vector<std::string> preferred_device = {"GPU", "CPU", "NPU"};
         const auto available_devices = core.get_available_devices();
         for (const auto& dev : preferred_device) {
             if (std::find(available_devices.begin(), available_devices.end(), dev) != available_devices.end()) {
@@ -206,18 +208,25 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
     }
     auto input_end_time = ggml_time_us();
 
+    ++infer_count;
     infer_request.infer();
     auto infer_end_time = ggml_time_us();
 
-    if (getenv("GGML_OPENVINO_PERF_COUNTS")) {
+    if (infer_count == 1 && getenv("GGML_OPENVINO_PERF_COUNTS")) {
         const auto perf_counts = infer_request.get_profiling_info();
         GGML_LOG_INFO("OpenVINO Layer-wise Performance (µs):\n");
         for (const auto& info : perf_counts) {
             const char* status_str = "UNKNOWN";
             switch (info.status) {
-                case ov::ProfilingInfo::Status::EXECUTED: status_str = "EXECUTED"; break;
-                case ov::ProfilingInfo::Status::NOT_RUN: status_str = "NOT_EXECUTED"; break;
-                case ov::ProfilingInfo::Status::OPTIMIZED_OUT: status_str = "OPTIMIZED_OUT"; break;
+            case ov::ProfilingInfo::Status::EXECUTED:
+                status_str = "EXECUTED";
+                break;
+            case ov::ProfilingInfo::Status::NOT_RUN:
+                status_str = "NOT_EXECUTED";
+                break;
+            case ov::ProfilingInfo::Status::OPTIMIZED_OUT:
+                status_str = "OPTIMIZED_OUT";
+                break;
             }
 
             GGML_LOG_INFO("  - %-40s | Exec Type: %-15s | Status: %-14s | Time: %6ld µs\n",
@@ -257,24 +266,22 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
 ov::AnyMap get_npu_config() {
     ov::AnyMap config = {
-        { "NPU_COMPILATION_MODE_PARAMS", "compute-layers-with-higher-precision=ReduceMean" },
-        { "NPU_USE_NPUW",                "YES"                                             },
-        { "NPUW_DEVICES",                "NPU"                                             },
-        { "NPUW_FOLD",                   "YES"                                             },
-        { "NPUW_HOST_GATHER",            "YES"                                             },
-        { "NPUW_DQ",                     "YES"                                             },
-        { "NPUW_FUNCALL_ASYNC",          "YES"                                             },
-        { "NPUW_WEIGHTS_BANK",           "shared"                                          },
+        {"NPU_COMPILATION_MODE_PARAMS", "compute-layers-with-higher-precision=ReduceMean"},
+        {"NPU_USE_NPUW",                "YES"                                            },
+        {"NPUW_DEVICES",                "NPU"                                            },
+        {"NPUW_FOLD",                   "YES"                                            },
+        {"NPUW_HOST_GATHER",            "YES"                                            },
+        {"NPUW_DQ",                     "YES"                                            },
+        {"NPUW_FUNCALL_ASYNC",          "YES"                                            },
+        {"NPUW_WEIGHTS_BANK",           "shared"                                         },
         // Option 'CACHE_DIR' is not supported with MLIR compiler type
         // {"NPUW_CACHE_DIR", getenv("GGML_OPENVINO_CACHE_DIR") ? getenv("GGML_OPENVINO_CACHE_DIR") : ""},
-        { "NPU_COMPILER_TYPE",           "MLIR"                                            },
+        {"NPU_COMPILER_TYPE",           "MLIR"                                           },
     };
     return config;
 }
 
-enum ggml_status naive_compute(struct ggml_cgraph* cgraph,
-                               ov::Core& core,
-                               const std::string& device,
+enum ggml_status naive_compute(struct ggml_cgraph* cgraph, ov::Core& core, const std::string& device,
                                const ov::AnyMap& config) {
     if (cgraph->nodes[0]->op == GGML_OP_NONE) {
         return GGML_STATUS_SUCCESS;
@@ -374,23 +381,23 @@ void print_input_tensor_info(const std::string& name, const ov::Tensor& tensor) 
     std::cout << "Input name: " << name << ", Input shape: " << tensor.get_shape() << ", Address: " << tensor.data()
               << std::endl;
     switch (tensor.get_element_type()) {
-        case ov::element::f32:
-            std::cout << *(tensor.data<float>()) << std::endl;
-            break;
-        case ov::element::f16:
-            std::cout << *(tensor.data<ov::float16>()) << std::endl;
-            break;
-        case ov::element::i32:
-            for (size_t i = 0; i < tensor.get_size(); ++i) {
-                std::cout << tensor.data<int32_t>()[i] << " ";
-            }
-            std::cout << std::endl;
-            break;
-        case ov::element::i64:
-            std::cout << *(tensor.data<int64_t>()) << std::endl;
-            break;
-        default:
-            break;
+    case ov::element::f32:
+        std::cout << *(tensor.data<float>()) << std::endl;
+        break;
+    case ov::element::f16:
+        std::cout << *(tensor.data<ov::float16>()) << std::endl;
+        break;
+    case ov::element::i32:
+        for (size_t i = 0; i < tensor.get_size(); ++i) {
+            std::cout << tensor.data<int32_t>()[i] << " ";
+        }
+        std::cout << std::endl;
+        break;
+    case ov::element::i64:
+        std::cout << *(tensor.data<int64_t>()) << std::endl;
+        break;
+    default:
+        break;
     }
 }
 
@@ -399,16 +406,16 @@ void print_output_tensor_info(const std::string& name, const ov::Tensor& tensor,
     std::cout << "Output name: " << name << ", Output shape: " << tensor.get_shape()
               << ", Address: " << output_dst[name] << std::endl;
     switch (tensor.get_element_type()) {
-        case ov::element::f32:
-            std::cout << *(tensor.data<float>()) << std::endl;
-            std::cout << checksum(tensor.data(), tensor.get_byte_size()) << std::endl;
-            break;
-        case ov::element::f16:
-            std::cout << *(tensor.data<ov::float16>()) << std::endl;
-            std::cout << checksum(tensor.data(), tensor.get_byte_size()) << std::endl;
-            break;
-        default:
-            break;
+    case ov::element::f32:
+        std::cout << *(tensor.data<float>()) << std::endl;
+        std::cout << checksum(tensor.data(), tensor.get_byte_size()) << std::endl;
+        break;
+    case ov::element::f16:
+        std::cout << *(tensor.data<ov::float16>()) << std::endl;
+        std::cout << checksum(tensor.data(), tensor.get_byte_size()) << std::endl;
+        break;
+    default:
+        break;
     }
 }
 
