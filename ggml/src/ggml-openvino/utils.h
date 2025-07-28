@@ -46,3 +46,5 @@ ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, cons
 
 enum ggml_status naive_compute(struct ggml_cgraph* cgraph, ov::Core& core, const std::string& device,
                                const ov::AnyMap& config);
+
+void free_weight_buffer(struct ggml_cgraph* cgraph);

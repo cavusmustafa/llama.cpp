@@ -1,5 +1,7 @@
 #include "utils.h"
 
+#include <sys/mman.h>
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -20,6 +22,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "ggml-cpu.h"
 #include "ggml-impl.h"
 #include "ggml-openvino/ggml-decoder.h"
 #include "ggml.h"
@@ -52,12 +55,6 @@ std::map<std::string, void*> get_ggml_graph_output_dst(std::shared_ptr<GgmlOvDec
         output_tensors[name] = output_data;
     }
     return output_tensors;
-}
-
-static ov::frontend::FrontEnd::Ptr get_ggml_frontend() {
-    auto fem = ov::frontend::FrontEndManager();
-    auto front_end = fem.load_by_framework("ggml");
-    return front_end;
 }
 
 enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_cgraph* cgraph) {
@@ -124,6 +121,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
     } else {
         std::shared_ptr<ov::Model> model;
         auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph);
+        free_weight_buffer(cgraph);
 
         if (is_static) {
             ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, model_weights, is_static, true);
@@ -413,4 +411,47 @@ bool is_prefill(struct ggml_cgraph* cgraph) {
     }
     GGML_LOG_ERROR("is_prefill: inp_tokens not found in cgraph");
     throw std::runtime_error("is_prefill: inp_tokens not found in cgraph");
+}
+
+void free_weight_buffer(struct ggml_cgraph* cgraph) {
+    std::set<struct ggml_tensor*> weight_tensors;
+    std::set<struct ggml_backend_buffer*> weight_buffers;
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        auto* op = cgraph->nodes[i];
+        for (int j = 0; j < GGML_MAX_SRC; ++j) {
+            auto* src = op->src[j];
+            if (src == nullptr) {
+                break;
+            }
+            if (auto* buffer = src->buffer;
+                !src->view_src && buffer != nullptr && buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+                weight_tensors.insert(src);
+                weight_buffers.insert(buffer);
+            }
+        }
+    }
+    if (weight_buffers.size() > 1) {
+        GGML_LOG_DEBUG("Freeing %zu weight buffers", weight_buffers.size());
+    }
+    for (auto* buffer : weight_buffers) {
+        if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+            auto* mmap_base = buffer->mmap_base;
+            auto mmap_size = buffer->mmap_size;
+            // ggml_backend_buffer_free(buffer);
+            buffer->size = 0;
+#if !defined(_WIN32)
+            if (munmap(mmap_base, mmap_size) != 0) {
+                GGML_LOG_ERROR("Failed to munmap memory at %p with size %zu", mmap_base, mmap_size);
+            }
+#else
+#endif
+        }
+    }
+
+    // auto* dummy_backend = ggml_backend_cpu_init();
+    // auto* dummy_buffer = ggml_backend_alloc_buffer(dummy_backend, 1);
+    // dummy_buffer->usage = GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
+    // for (const auto& tensor : weight_tensors) {
+    //     tensor->buffer = dummy_buffer;
+    // }
 }

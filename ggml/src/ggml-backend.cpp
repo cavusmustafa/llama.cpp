@@ -38,7 +38,7 @@ const char * ggml_backend_buft_name(ggml_backend_buffer_type_t buft) {
 ggml_backend_buffer_t ggml_backend_buft_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     if (size == 0) {
         // return a dummy buffer for zero-sized allocations
-        return ggml_backend_buffer_init(buft, {}, NULL, 0);
+        return ggml_backend_buffer_init(buft, {}, NULL, 0, NULL, 0);
     }
 
     return buft->iface.alloc_buffer(buft, size);
@@ -79,17 +79,17 @@ ggml_backend_dev_t ggml_backend_buft_get_device(ggml_backend_buffer_type_t buft)
 
 // backend buffer
 
-ggml_backend_buffer_t ggml_backend_buffer_init(
-               ggml_backend_buffer_type_t buft,
-        struct ggml_backend_buffer_i      iface,
-               void *                     context,
-               size_t                     size) {
-    ggml_backend_buffer_t buffer = new ggml_backend_buffer {
+ggml_backend_buffer_t ggml_backend_buffer_init(ggml_backend_buffer_type_t buft, struct ggml_backend_buffer_i iface,
+                                               void * context, size_t size, void * mmap_base = NULL,
+                                               size_t mmap_size = 0) {
+    ggml_backend_buffer_t buffer = new ggml_backend_buffer{
         /* .interface = */ iface,
         /* .buft      = */ buft,
         /* .context   = */ context,
         /* .size      = */ size,
-        /* .usage     = */ GGML_BACKEND_BUFFER_USAGE_ANY
+        /* .usage     = */ GGML_BACKEND_BUFFER_USAGE_ANY,
+        /* .mmap_base = */ mmap_base,
+        /* .mmap_size = */ mmap_size,
     };
 
     return buffer;
@@ -488,8 +488,10 @@ ggml_backend_buffer_type_t ggml_backend_dev_host_buffer_type(ggml_backend_dev_t 
     return device->iface.get_host_buffer_type(device);
 }
 
-ggml_backend_buffer_t ggml_backend_dev_buffer_from_host_ptr(ggml_backend_dev_t device, void * ptr, size_t size, size_t max_tensor_size) {
-    return device->iface.buffer_from_host_ptr(device, ptr, size, max_tensor_size);
+ggml_backend_buffer_t ggml_backend_dev_buffer_from_host_ptr(ggml_backend_dev_t device, void * ptr, size_t size,
+                                                            size_t max_tensor_size, void * mmap_base,
+                                                            size_t mmap_size) {
+    return device->iface.buffer_from_host_ptr(device, ptr, size, max_tensor_size, mmap_base, mmap_size);
 }
 
 bool ggml_backend_dev_supports_op(ggml_backend_dev_t device, const struct ggml_tensor * op) {
@@ -2028,7 +2030,9 @@ static ggml_backend_buffer_type_t ggml_backend_cpu_buffer_from_ptr_type(void) {
     return &ggml_backend_cpu_buffer_type;
 }
 
-ggml_backend_buffer_t ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size) {
+ggml_backend_buffer_t ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size, void * mmap_base = NULL,
+                                                       size_t mmap_size = 0) {
     GGML_ASSERT((uintptr_t)ptr % TENSOR_ALIGNMENT == 0 && "buffer pointer must be aligned");
-    return ggml_backend_buffer_init(ggml_backend_cpu_buffer_from_ptr_type(), ggml_backend_cpu_buffer_from_ptr_i, ptr, size);
+    return ggml_backend_buffer_init(ggml_backend_cpu_buffer_from_ptr_type(), ggml_backend_cpu_buffer_from_ptr_i, ptr,
+                                    size, mmap_base, mmap_size);
 }

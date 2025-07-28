@@ -220,11 +220,15 @@ static ggml_backend_buffer_type_t ggml_backend_openvino_device_get_host_buffer_t
     return ggml_backend_openvino_host_buffer_type();
 }
 
-static ggml_backend_buffer_t ggml_backend_openvino_device_buffer_from_ptr(ggml_backend_dev_t dev, void * ptr, size_t size, size_t max_tensor_size) {
+static ggml_backend_buffer_t ggml_backend_openvino_device_buffer_from_ptr(ggml_backend_dev_t dev, void* ptr,
+                                                                          size_t size, size_t max_tensor_size,
+                                                                          void* mmap_base, size_t mmap_size) {
     GGML_UNUSED(dev);
     GGML_UNUSED(ptr);
     GGML_UNUSED(size);
     GGML_UNUSED(max_tensor_size);
+    GGML_UNUSED(mmap_base);
+    GGML_UNUSED(mmap_size);
     return nullptr;
 }
 

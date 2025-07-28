@@ -382,8 +382,8 @@ static ggml_backend_buffer_type_t ggml_backend_cpu_device_get_buffer_type(ggml_b
     GGML_UNUSED(dev);
 }
 
-static ggml_backend_buffer_t ggml_backend_cpu_device_buffer_from_host_ptr(ggml_backend_dev_t dev, void * ptr, size_t size, size_t max_tensor_size) {
-    return ggml_backend_cpu_buffer_from_ptr(ptr, size);
+static ggml_backend_buffer_t ggml_backend_cpu_device_buffer_from_host_ptr(ggml_backend_dev_t dev, void * ptr, size_t size, size_t max_tensor_size, void * mmap_base, size_t mmap_size) {
+    return ggml_backend_cpu_buffer_from_ptr(ptr, size, mmap_base, mmap_size);
 
     GGML_UNUSED(dev);
     GGML_UNUSED(max_tensor_size);

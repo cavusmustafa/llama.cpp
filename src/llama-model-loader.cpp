@@ -875,13 +875,14 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
     }
 }
 
-void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const {
+void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void ** addr, size_t * size, int idx, ggml_context * ctx) const {
     GGML_ASSERT(!mappings.empty());
     const auto & mapping = mappings.at(idx);
 
     *first = mapping->size();
     *last  = 0;
     *addr = mapping->addr();
+    *size = mapping->size();
     for (ggml_tensor * tensor = ggml_get_first_tensor(ctx); tensor; tensor = ggml_get_next_tensor(ctx, tensor)) {
         const auto * weight = get_weight(ggml_get_name(tensor));
         if (!weight || weight->idx != idx) {

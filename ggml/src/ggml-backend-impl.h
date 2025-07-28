@@ -63,13 +63,17 @@ extern "C" {
         void * context;
         size_t size;
         enum ggml_backend_buffer_usage usage;
+        void *                         mmap_base;
+        size_t                         mmap_size;
     };
 
     GGML_API ggml_backend_buffer_t ggml_backend_buffer_init(
                    ggml_backend_buffer_type_t buft,
             struct ggml_backend_buffer_i      iface,
                    void *                     context,
-                   size_t                     size);
+                   size_t                     size,
+                   void *                     mmap_base,
+                   size_t                     mmap_size);
 
     // do not use directly, use ggml_backend_tensor_copy instead
     GGML_API bool ggml_backend_buffer_copy_tensor(const struct ggml_tensor * src, struct ggml_tensor * dst);
@@ -160,7 +164,8 @@ extern "C" {
         ggml_backend_buffer_type_t (*get_host_buffer_type)(ggml_backend_dev_t dev);
 
         // (optional) buffer from pointer: create a buffer from a host pointer (useful for memory mapped models and importing data from other libraries)
-        ggml_backend_buffer_t (*buffer_from_host_ptr)(ggml_backend_dev_t dev, void * ptr, size_t size, size_t max_tensor_size);
+        ggml_backend_buffer_t (*buffer_from_host_ptr)(ggml_backend_dev_t dev, void * ptr, size_t size,
+                                                      size_t max_tensor_size, void * mmap_base, size_t mmap_size);
 
         // check if the backend can compute an operation
         bool (*supports_op)(ggml_backend_dev_t dev, const struct ggml_tensor * op);
