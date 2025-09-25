@@ -37,18 +37,18 @@ OutputVector translate_permute(const NodeContext& context) {
         auto src_shape_ = context.get_input_shape(0).to_shape();
         std::vector<int64_t> src_shape(src_shape_.begin(), src_shape_.end());
 
-        std::shared_ptr<ov::Node> src_reshaped;
-        if (op_case == 2) {
-            src_reshaped = std::make_shared<ov::op::v1::Reshape>(
-                src,
-                ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{-1, src_shape[1], src_shape[2]}),
-                false);
-        } else {
-            src_reshaped = std::make_shared<ov::op::v1::Reshape>(
-                src,
-                ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{src_shape[1], src_shape[0], -1}),
-                false);
-        }
+        //std::shared_ptr<ov::Node> src_reshaped;
+        //if (op_case == 2) {
+        //    src_reshaped = std::make_shared<ov::op::v1::Reshape>(
+        //        src,
+        //        ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{-1, src_shape[1], src_shape[2]}),
+        //        false);
+        //} else {
+        //    src_reshaped = std::make_shared<ov::op::v1::Reshape>(
+        //        src,
+        //        ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{src_shape[1], src_shape[0], -1}),
+        //        false);
+        //}
 
         auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
         auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
@@ -59,12 +59,14 @@ OutputVector translate_permute(const NodeContext& context) {
         } else {
             slice_axis = two;
         }
-        auto src_slice = std::make_shared<ov::op::v8::Slice>(src_reshaped, zero, attention_size, one, slice_axis);
+        //auto src_slice = std::make_shared<ov::op::v8::Slice>(src_reshaped, zero, attention_size, one, slice_axis);
 
         if (op_case == 2) {
-            res = std::make_shared<ov::op::v1::Transpose>(src_slice, ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2}));
+            //res = std::make_shared<ov::op::v1::Transpose>(src_slice, ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2}));
+            res = std::make_shared<ov::op::v1::Transpose>(src, ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2}));
         } else {
-            res = src_slice;
+            //res = src_slice;
+            res = src;
         }
     }
     return rename_outputs_with_suffix({res}, context.get_name());

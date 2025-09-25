@@ -270,9 +270,11 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor* src) co
             input_shape = ov::PartialShape{1, ov::Dimension(1, max_mask_size), ov::Dimension(1, max_mask_size)};
         }
     } else if (name.find("cache_k") == 0) {
-        input_shape = ov::PartialShape{m_context_size, m_num_heads_kv, m_head_size};
+        //input_shape = ov::PartialShape{m_context_size, m_num_heads_kv, m_head_size};
+        input_shape = ov::PartialShape{-1, m_num_heads_kv, m_head_size};
     } else if (name.find("cache_v") == 0) {
-        input_shape = ov::PartialShape{m_context_size, m_num_heads_kv, m_head_size};
+        //input_shape = ov::PartialShape{m_context_size, m_num_heads_kv, m_head_size};
+        input_shape = ov::PartialShape{-1, m_num_heads_kv, m_head_size};
     } else if (const auto* op = get_tensor_used_op(src); op && op->op == GGML_OP_SET_ROWS) {
         input_shape = ov::PartialShape{1, 1, m_is_static ? 1 : -1};
     } else if (src->op == GGML_OP_VIEW) {
