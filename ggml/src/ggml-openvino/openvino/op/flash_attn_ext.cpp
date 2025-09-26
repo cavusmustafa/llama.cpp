@@ -2,6 +2,7 @@
 #include <openvino/op/broadcast.hpp>
 #include <openvino/op/concat.hpp>
 #include <openvino/op/convert.hpp>
+#include <openvino/op/gather.hpp>
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/scaled_dot_product_attention.hpp>
 #include <openvino/op/transpose.hpp>
@@ -41,9 +42,17 @@ OutputVector translate_flash_attn_ext(const NodeContext& context) {
         mask_sliced = context.get_input(mask_name);
     } else {
         auto token_len = get_dimensions(q, {1});
-        auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
-        auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
-        mask_sliced = std::make_shared<ov::op::v8::Slice>(mask, zero, token_len, one, one);
+        auto zero_2d = ov::op::v0::Constant::create(ov::element::i64, {2}, {0,0});
+        auto one_2d = ov::op::v0::Constant::create(ov::element::i64, {2}, {1,1});
+        auto zero_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
+        auto two_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
+        auto axes = ov::op::v0::Constant::create(ov::element::i64, {2}, {1,2});
+        auto leaf_8 = context.get_input("leaf_8");
+        auto shape_of_leaf_8 = std::make_shared<ov::op::v3::ShapeOf>(leaf_8);
+        auto gather_leaf_8 = std::make_shared<ov::op::v8::Gather>(shape_of_leaf_8, two_1d, zero_1d);
+        auto stop = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{token_len, gather_leaf_8}, 0);
+        mask_sliced =
+            std::make_shared<ov::op::v8::Slice>(mask, zero_2d, stop, one_2d, axes);
     }
 
     if (mask_sliced.get_element_type() != ov::element::f16) {

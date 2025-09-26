@@ -38,20 +38,23 @@ OutputVector translate_permute(const NodeContext& context) {
             attention_size = context.get_input("attention_size_swa");
         }
 
-        auto src_shape_ = context.get_input_shape(0).to_shape();
-        std::vector<int64_t> src_shape(src_shape_.begin(), src_shape_.end());
-
-        auto src_reshaped = std::make_shared<ov::op::v1::Reshape>(
-            src,
-            ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{-1, src_shape[1], src_shape[2]}),
-            false);
-
         auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
         auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
-        auto src_slice = std::make_shared<ov::op::v8::Slice>(src_reshaped, zero, attention_size, one, zero);
 
-        res = std::make_shared<ov::op::v1::Transpose>(src_slice,
-                                                      ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2}));
+        if (context.is_static()) {
+            auto src_shape_ = context.get_input_shape(0).to_shape();
+            std::vector<int64_t> src_shape(src_shape_.begin(), src_shape_.end());
+            auto src_reshaped = std::make_shared<ov::op::v1::Reshape>(
+                src,
+                ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{-1, src_shape[1], src_shape[2]}),
+                false);
+            auto src_slice = std::make_shared<ov::op::v8::Slice>(src_reshaped, zero, attention_size, one, zero);
+            res = std::make_shared<ov::op::v1::Transpose>(src_slice,
+                                                          ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2}));
+        } else {
+            res = std::make_shared<ov::op::v1::Transpose>(src,
+                                                          ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2}));
+        }
     }
     return rename_outputs_with_suffix({res}, context.get_name());
 }
