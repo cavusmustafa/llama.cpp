@@ -40,9 +40,11 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
                              ComputeParams & compute_params,
                              std::map<std::string, std::shared_ptr<ov::Node>> & model_weights,
                              bool is_static,
+                             bool is_stateful,
                              bool is_prefill,
                              int prefill_chunk_size) :
     m_is_static(is_static),
+    m_is_stateful(is_stateful),
     m_is_prefill(is_prefill),
     m_prefill_chunk_size(prefill_chunk_size),
     m_cgraph(cgraph),
@@ -156,6 +158,9 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
                 // GGML_BACKEND_BUFFER_USAGE_ANY are kv caches
                 if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY) {
                     assert(src_name.find("cache_k") == 0 || src_name.find("cache_v") == 0);
+                    if (auto it = std::find(m_model_params.kv_names.begin(), m_model_params.kv_names.end(), src_name); it == m_model_params.kv_names.end()) {
+                        m_model_params.kv_names.push_back(src_name);
+                    }
                 }
                 if (m_model_inputs.find(src_name) != m_model_inputs.end()) {
                     continue;
@@ -458,15 +463,15 @@ const ggml_tensor * GgmlOvDecoder::get_tensor_from_name(const std::string & name
     return nullptr;
 }
 
-// std::map<std::string, std::string> GgmlOvDecoder::get_kv_param_res_names() const {
-//     std::map<std::string, std::string> kv_param_res_names;
-//     for (const auto & name : m_model_params.kv_names) {
-//         if (name.find("cache_k") == 0 || name.find("cache_v") == 0) {
-//             kv_param_res_names[name] = name;
-//         }
-//     }
-//     return kv_param_res_names;
-// }
+std::map<std::string, std::string> GgmlOvDecoder::get_kv_param_res_names() const {
+    std::map<std::string, std::string> kv_param_res_names;
+    for (const auto & name : m_model_params.kv_names) {
+        if (name.find("cache_k") == 0 || name.find("cache_v") == 0) {
+            kv_param_res_names[name] = name;
+        }
+    }
+    return kv_param_res_names;
+}
 
 std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_nodes(
     ggml_cgraph * cgraph,

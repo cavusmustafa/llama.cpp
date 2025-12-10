@@ -56,10 +56,15 @@ enum ggml_status ov_graph_compute(ggml_cgraph * cgraph) {
 
     static const auto device = get_device();
     static const auto is_static = device == "NPU" ? true : false;
-    return is_static ? ov_graph_compute_static(cgraph) : ov_graph_compute_dynamic(cgraph, device);
+    bool stateful = false;
+    if (getenv("GGML_OPENVINO_STATEFUL_EXECUTION") && !is_static) {
+        stateful = true;
+    }
+
+    return is_static ? ov_graph_compute_static(cgraph) : ov_graph_compute_dynamic(cgraph, device, stateful);
 }
 
-enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::string & device) {
+enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::string & device, bool stateful) {
     static auto is_static = false;
     static auto config = get_ov_compile_config(device);
 
@@ -117,7 +122,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::strin
             std::shared_ptr<ov::Model> model;
             auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph, get_types_to_requant(device));
 
-            ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights, is_static);
+            ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights, is_static, stateful);
             decoder_end_time = ggml_time_us();
 
             auto input_model = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder);
@@ -203,6 +208,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph) {
 
     static std::string device = "NPU";
     static auto is_static = true;
+    static auto stateful = false;
     static auto prefill_chunk_size = get_prefill_chunk_size();
     static auto config = get_ov_compile_config(device);
 
@@ -266,9 +272,9 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph) {
             auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph, get_types_to_requant(device));
 
             auto ggml_decoder_prefill = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights,
-                                                                        is_static, true, prefill_chunk_size);
+                                                                        is_static, stateful, true, prefill_chunk_size);
             auto ggml_decoder_decode = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights,
-                                                                       is_static, false, prefill_chunk_size);
+                                                                       is_static, stateful, false, prefill_chunk_size);
             decoder_end_time = ggml_time_us();
 
             auto input_model_prefill = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder_prefill);
