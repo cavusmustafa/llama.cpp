@@ -623,8 +623,17 @@ ov::Tensor get_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, con
     if (ggml_decoder->is_static() && result_name == "result_output" && output_shape[2] == 0) {
         output_shape[2] = 1;
     }
-    ov::Tensor output_tensor(output_type, output_shape, ggml_tensor->data);
-    return output_tensor;
+    if (ggml_decoder->is_stateful() && result_name == "result_output") {
+        std::vector<long unsigned int> output_shape_3d;
+        for (size_t i=1; i<output_shape.size(); i++) {
+            output_shape_3d.push_back(output_shape[i]);
+        }
+        ov::Tensor output_tensor(output_type, output_shape_3d, ggml_tensor->data);
+        return output_tensor;
+    } else {
+        ov::Tensor output_tensor(output_type, output_shape, ggml_tensor->data);
+        return output_tensor;
+    }
 }
 
 size_t checksum(const void * data, size_t size) {

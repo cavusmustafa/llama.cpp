@@ -47,12 +47,12 @@ OutputVector translate_set_rows(const NodeContext & context) {
 
     Output<Node> res;
     if (context.is_stateful()) {
-        //auto data_transposed = std::make_shared<ov::op::v1::Transpose>(data,
-        //                                              ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3}));
-        //int concat_axis = -2;
-        //res = std::make_shared<ov::op::v0::Concat>(OutputVector{dst, data_transposed}, concat_axis);
-        int concat_axis = -2;
-        res = std::make_shared<ov::op::v0::Concat>(OutputVector{dst, data_reshaped}, concat_axis);
+        int concat_axis = 1;
+        int64_t dim2 = dst.get_partial_shape()[2].get_length();
+        int64_t dim3 = dst.get_partial_shape()[3].get_length();
+        data = std::make_shared<ov::op::v1::Reshape>(
+            data, ov::op::v0::Constant::create(ov::element::i64, {4}, {(int64_t) 1, (int64_t) -1, dim2, dim3}), false);
+        res = std::make_shared<ov::op::v0::Concat>(OutputVector{dst, data}, concat_axis);
     } else {
         res = std::make_shared<ov::op::v3::ScatterUpdate>(dst, ind_squeezed, data_reshaped, axes);
     }

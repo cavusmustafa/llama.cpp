@@ -89,13 +89,12 @@ void add_sliced_mask(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
                 auto zero_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
                 auto two_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
                 auto axes = ov::op::v0::Constant::create(ov::element::i64, {2}, {-2,-1});
-                auto leaf_8 = tensor_map.at("leaf_8").get_node_shared_ptr();
+                auto leaf_8 = tensor_map.at("inp_pos").get_node_shared_ptr();
                 auto shape_of_leaf_8 = std::make_shared<ov::op::v3::ShapeOf>(leaf_8);
                 auto gather_leaf_8 = std::make_shared<ov::op::v8::Gather>(shape_of_leaf_8, two_1d, zero_1d);
                 auto stop = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{token_len_per_seq, gather_leaf_8}, 0);
                 mask_sliced =
                     std::make_shared<ov::op::v8::Slice>(mask, zero_2d, stop, one_2d, axes);
-
                 mask_sliced = std::make_shared<ov::op::v0::Convert>(mask_sliced, ov::element::f16);
                 mask_sliced->set_friendly_name(sliced_name);
             } else {
