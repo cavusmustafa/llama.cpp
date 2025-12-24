@@ -6738,6 +6738,8 @@ struct ggml_cgraph * ggml_new_graph_custom(struct ggml_context * ctx, size_t siz
         /*.use_counts   =*/ use_counts_ptr,
         /*.hash_table   =*/ { hash_size, hash_used, hash_keys_ptr },
         /*.order        =*/ GGML_CGRAPH_EVAL_ORDER_LEFT_TO_RIGHT,
+        /*.n_tokens     =*/ 0,
+        /*.seq_id     =*/ {0},
     };
 
     ggml_hash_set_reset(&cgraph->visited_hash_set);
@@ -6765,9 +6767,19 @@ struct ggml_cgraph ggml_graph_view(struct ggml_cgraph * cgraph0, int i0, int i1)
         /*.use_counts       =*/ cgraph0->use_counts,
         /*.visited_hash_set =*/ cgraph0->visited_hash_set,
         /*.order            =*/ cgraph0->order,
+        /*.n_tokens     =*/ cgraph0->n_tokens,
+        /*.seq_id     =*/ {0},
     };
 
     return cgraph;
+}
+
+void ggml_graph_set_n_tokens(struct ggml_cgraph * cgraph, int32_t n_tokens) {
+    cgraph->n_tokens = n_tokens;
+}
+
+void ggml_graph_set_seq_id(struct ggml_cgraph * cgraph, int32_t idx, int32_t seq_id) {
+    cgraph->seq_id[idx] = seq_id;
 }
 
 void ggml_graph_cpy(struct ggml_cgraph * src, struct ggml_cgraph * dst) {

@@ -799,6 +799,13 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
 
+    ggml_graph_set_n_tokens(gf, ubatch.n_tokens);
+    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+        const auto & seq_id = ubatch.seq_id[i][0];
+        //std::cout << "\tDEBUG - llama_context - process_ubatch - seq_id: " << seq_id << std::endl;
+        ggml_graph_set_seq_id(gf, i, seq_id);
+    }
+
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
@@ -1073,6 +1080,12 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         break;
+    }
+
+    const auto & ubatch = mctx->get_ubatch();
+    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+        const auto & seq_id = ubatch.seq_id[i][0];
+        //std::cout << "\tDEBUG - llama_context - decode - seq_id: " << seq_id << std::endl;
     }
 
     // reserve output buffer

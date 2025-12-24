@@ -47,6 +47,7 @@ OutputVector translate_set_rows(const NodeContext & context) {
 
     Output<Node> res;
     if (context.is_stateful()) {
+        std::cout << "DEBUG - ggml_openvino - set_rows - dst.shape: " << dst.get_partial_shape() << std::endl;
         int concat_axis = 1;
         int64_t dim2 = dst.get_partial_shape()[2].get_length();
         int64_t dim3 = dst.get_partial_shape()[3].get_length();

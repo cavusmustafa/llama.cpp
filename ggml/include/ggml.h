@@ -2490,6 +2490,9 @@ extern "C" {
     GGML_API struct ggml_tensor ** ggml_graph_nodes  (struct ggml_cgraph * cgraph);
     GGML_API int                   ggml_graph_n_nodes(struct ggml_cgraph * cgraph);
 
+    GGML_API void ggml_graph_set_n_tokens(struct ggml_cgraph * cgraph, int32_t n_tokens);
+    GGML_API void ggml_graph_set_seq_id(struct ggml_cgraph * cgraph, int32_t idx, int32_t seq_id);
+
     GGML_API void   ggml_graph_add_node(struct ggml_cgraph * cgraph, struct ggml_tensor * tensor);
 
     GGML_API size_t ggml_graph_overhead(void);

@@ -160,14 +160,17 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
                 if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY) {
                     assert(src_name.find("cache_k") == 0 || src_name.find("cache_v") == 0);
                     if (auto it = std::find(m_model_params.kv_names.begin(), m_model_params.kv_names.end(), src_name); it == m_model_params.kv_names.end()) {
+                        std::cout << "DEBUG - ggml_openvino - decoder - kv_cache_input - name: " << src_name << std::endl;
                         m_model_params.kv_names.push_back(src_name);
-                        if (is_stateful()) {
+                        if (m_is_stateful) {
                             // TODO: The shape modification for stateful model below is not validated for all supported models yet. More generic solution might be needed
                             // to enable additional cases. Ideally, this could be removed from decoder and done as part of a transformation later.
                             auto stateless_kv_shape = get_graph_input_shape(node, src);
                             assert(stateless_kv_shape.size() == 4 && stateless_kv_shape[0] == 1 && stateless_kv_shape[1] == 1
                                    && stateless_kv_shape[2].is_dynamic() && stateless_kv_shape[3] == (m_model_params.n_heads_kv*m_model_params.head_size));
                             stateful_kv_shape = {stateless_kv_shape[0], ov::Dimension::dynamic(), m_model_params.n_heads_kv, m_model_params.head_size};
+                            std::cout << "\tDEBUG - ggml_openvino - decoder - kv_cache_input - stateless_shape: " << stateless_kv_shape << std::endl;
+                            std::cout << "\tDEBUG - ggml_openvino - decoder - kv_cache_input - stateful_shape: " << stateful_kv_shape << std::endl;
                         }
                     }
                 }

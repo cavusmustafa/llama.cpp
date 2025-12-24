@@ -39,6 +39,12 @@
 static ov::Core core;
 
 enum ggml_status ov_graph_compute(ggml_cgraph * cgraph) {
+    std::cout << "DEBUG - openvino - openvino_frontend_compute" << std::endl;
+    std::cout << "DEBUG - openvino - openvino_frontend_compute - n_tokens: " << cgraph->n_tokens << std::endl;
+    for (size_t i=0; (i < cgraph->n_tokens) && (i < 4); i++) {
+        std::cout << "\tDEBUG - openvino - openvino_frontend_compute - seq_id: " << cgraph->seq_id[i] << std::endl;
+    }
+
     auto get_device = [&] {
         std::string device = getenv("GGML_OPENVINO_DEVICE") ? getenv("GGML_OPENVINO_DEVICE") : "CPU";
         auto available_devices = core.get_available_devices();
@@ -61,10 +67,10 @@ enum ggml_status ov_graph_compute(ggml_cgraph * cgraph) {
         stateful = true;
     }
 
-    return is_static ? ov_graph_compute_static(cgraph) : ov_graph_compute_dynamic(cgraph, device, stateful);
+    return is_static ? ov_graph_compute_static(cgraph) : ov_graph_compute_dynamic(cgraph, device, cgraph->seq_id[0], stateful);
 }
 
-enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::string & device, bool stateful) {
+enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::string & device, int seq_id, bool stateful) {
     static auto is_static = false;
     static auto config = get_ov_compile_config(device);
 
@@ -86,7 +92,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::strin
     ComputeParams c_params;
     std::tie(m_params, c_params) = GgmlOvDecoder::compute_llm_params(cgraph, is_static);
 
-    const auto key = compute_graph_key(cgraph);
+    const auto key = compute_graph_key(cgraph, seq_id);
     bool cache_hit;
 
     int64_t decoder_end_time;
@@ -164,8 +170,16 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::strin
         auto input_tensor = get_ov_input_tensor(ggml_decoder, param_name);
         infer_request->set_input_tensor(i, input_tensor);
 
-        if (getenv("GGML_OPENVINO_DEBUG_INPUT")) {
+        if (getenv("GGML_OPENVINO_DEBUG_INPUT") && param_name != "KQ_mask") {
             print_input_tensor_info(param_name, input_tensor);
+            //if (param_name == "inp_pos") {
+            //    const auto * ggml_tensor = ggml_decoder->get_input_ggml_tensor(param_name);
+            //    ov::Shape input_shape = {1, 1, 1, 1};
+            //    ov::Tensor input_tensor(ggml_decoder->get_input_type(i, param_name), input_shape);
+            //    size_t element_size = ggml_type_size(ggml_tensor->type);
+            //    void * input_data = (char *) ggml_tensor->data;
+            //    std::cout << "DEBUG - openvino - input_data - inp_pos: " << *((int32_t*)(input_data)) << std::endl;
+            //}
         }
     }
 
@@ -233,7 +247,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph) {
 
     const auto * inp_pos = get_inp_pos_tensor(cgraph);
     const auto is_prefill = get_is_prefill(inp_pos);
-    const auto key = compute_graph_key(cgraph);
+    const auto key = compute_graph_key(cgraph, 0);
     bool cache_hit;
 
     int64_t decoder_end_time;
@@ -770,16 +784,18 @@ bool get_is_prefill(const ggml_tensor * inp_pos) {
     return inp_pos->ne[0] > 1;
 }
 
-graph_key compute_graph_key(ggml_cgraph * cgraph) {
+graph_key compute_graph_key(ggml_cgraph * cgraph, int seq_id) {
     graph_key key;
     key.n_nodes = cgraph->n_nodes;
 
     if (cgraph->n_nodes > 0) {
         key.first_node_name = std::string(cgraph->nodes[0]->name);
         key.last_node_name = std::string(cgraph->nodes[cgraph->n_nodes - 1]->name);
+	key.seq_id = seq_id;
     } else {
         key.first_node_name = "";
         key.last_node_name = "";
+	key.seq_id = 0;
     }
 
     return key;

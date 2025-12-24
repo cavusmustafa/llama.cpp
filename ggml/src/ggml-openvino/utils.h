@@ -10,10 +10,11 @@ struct graph_key {
     size_t n_nodes;
     std::string first_node_name;
     std::string last_node_name;
+    int seq_id;
 
     bool operator==(const graph_key & other) const {
         return n_nodes == other.n_nodes && first_node_name == other.first_node_name &&
-               last_node_name == other.last_node_name;
+               last_node_name == other.last_node_name && seq_id == other.seq_id;
     }
 };
 
@@ -28,7 +29,7 @@ struct graph_key_hash {
 
 enum ggml_status ov_graph_compute(struct ggml_cgraph * cgraph);
 
-enum ggml_status ov_graph_compute_dynamic(struct ggml_cgraph * cgraph, const std::string & device, bool stateful = false);
+enum ggml_status ov_graph_compute_dynamic(struct ggml_cgraph * cgraph, const std::string & device, int seq_id, bool stateful = false);
 enum ggml_status ov_graph_compute_static(struct ggml_cgraph * cgraph);
 
 size_t checksum(const void * data, size_t size);
@@ -69,7 +70,7 @@ const ggml_tensor * get_inp_pos_tensor(struct ggml_cgraph * cgraph);
 
 bool get_is_prefill(const ggml_tensor * inp_pos);
 
-graph_key compute_graph_key(struct ggml_cgraph * cgraph);
+graph_key compute_graph_key(struct ggml_cgraph * cgraph, int seq_id);
 
 ov::AnyMap get_ov_compile_config(const std::string & device);
 

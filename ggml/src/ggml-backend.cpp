@@ -1750,6 +1750,12 @@ enum ggml_status ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sch
         }
     }
 
+    sched->splits[0].graph.n_tokens = graph->n_tokens;
+    sched->splits[0].graph.seq_id[0] = graph->seq_id[0];
+    sched->splits[0].graph.seq_id[1] = graph->seq_id[1];
+    sched->splits[0].graph.seq_id[2] = graph->seq_id[2];
+    sched->splits[0].graph.seq_id[3] = graph->seq_id[3];
+
     return ggml_backend_sched_compute_splits(sched);
 }
 
