@@ -67,6 +67,9 @@ public:
     virtual bool is_stateful() const = 0;
 
     virtual int is_swa_layer(int layer) const = 0;
+
+    virtual std::shared_ptr<ov::Node> get_inp_pos() const = 0;
+    virtual std::shared_ptr<ov::Node> get_rope_freqs() const = 0;
 };
 
 }  // namespace ggml

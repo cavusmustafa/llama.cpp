@@ -93,7 +93,7 @@ void add_sliced_mask(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
                 auto three_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {3});
                 auto neg_one_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
                 auto axes = ov::op::v0::Constant::create(ov::element::i64, {2}, {-2,-1});
-                auto inp_pos = tensor_map.at("inp_pos").get_node_shared_ptr();
+                auto inp_pos = ggml_model_decoder.get_inp_pos();
                 auto gather_inp_pos = std::make_shared<ov::op::v8::Gather>(inp_pos, neg_one_1d, three_1d);
                 auto reshaped_inp_pos = std::make_shared<ov::op::v1::Reshape>(gather_inp_pos, ov::op::v0::Constant::create(ov::element::i64, {1}, {1}), false);
                 auto inp_pos_incremented = std::make_shared<ov::op::v1::Add>(reshaped_inp_pos, ov::op::v0::Constant::create(ov::element::i32, ov::Shape{1}, {1}));
@@ -120,14 +120,11 @@ void add_sliced_mask(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
 
 void add_rope_sin_cos(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
     int32_t * rope_params = ggml_model_decoder.get_rope_params();
-    if (tensor_map.find("inp_pos") == tensor_map.end() || rope_params == nullptr) {
+    auto inp_pos = ggml_model_decoder.get_inp_pos();
+    if (inp_pos == nullptr || rope_params == nullptr) {
         return;
     }
-    auto inp_pos = tensor_map.at("inp_pos").get_node_shared_ptr();
-    std::shared_ptr<ov::Node> rope_freqs_weight;
-    if (tensor_map.find("rope_freqs.weight") != tensor_map.end()) {
-        rope_freqs_weight = tensor_map.at("rope_freqs.weight").get_node_shared_ptr();
-    }
+    std::shared_ptr<ov::Node> rope_freqs_weight = ggml_model_decoder.get_rope_freqs();
 
     auto sin_cos = make_sin_cos(rope_params, inp_pos, rope_freqs_weight);
     auto sin_theta = sin_cos.first;

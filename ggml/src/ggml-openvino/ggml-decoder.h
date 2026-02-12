@@ -27,6 +27,9 @@ struct ModelParams {
     std::vector<std::string> kv_names;
     size_t kv_buffer_ctx_id = 0;
 
+    char * inp_pos_name = nullptr;
+    char * rope_freqs_name = nullptr;
+
     bool same_rope_params(const ModelParams & other) const {
         return memcmp(rope_params, other.rope_params, sizeof(int32_t) * 15) == 0;
     }
@@ -203,6 +206,16 @@ public:
     void set_model_params(const ModelParams & model_params) { m_model_params = model_params; }
 
     void set_compute_params(const ComputeParams & compute_params) { m_compute_params = compute_params; }
+
+    virtual std::shared_ptr<ov::Node> get_inp_pos() const override {
+        auto inp_pos_node = m_model_inputs.find(m_model_params.inp_pos_name); 
+        return (inp_pos_node != m_model_inputs.end()) ? inp_pos_node->second : nullptr;
+    }
+
+    virtual std::shared_ptr<ov::Node> get_rope_freqs() const override {
+        auto rope_freqs_node = m_model_inputs.find(m_model_params.rope_freqs_name); 
+        return (rope_freqs_node != m_model_inputs.end()) ? rope_freqs_node->second : nullptr;
+    }
 
     bool m_is_static = false;
     bool m_is_stateful = false;

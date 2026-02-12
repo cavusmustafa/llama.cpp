@@ -374,6 +374,8 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
         }
         if (node->op == GGML_OP_ROPE) {
             memcpy(model_params.rope_params, node->op_params, sizeof(int32_t) * 15);
+            model_params.inp_pos_name = node->src[1]->name;
+            model_params.rope_freqs_name = node->src[2]->name;
         }
     }
     auto * output_tensor = cgraph->nodes[cgraph->n_nodes - 1];
