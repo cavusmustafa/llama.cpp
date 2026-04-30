@@ -2326,6 +2326,23 @@ int main(int argc, char ** argv) {
         }
 
         for (int i = 0; i < params.reps; i++) {
+            // For OpenVINO stateful execution, reload context to ensure clean state
+            // This prevents state accumulation that causes performance degradation
+            const char* ov_backend = getenv("GGML_OPENVINO_DEVICE");
+            if (i > 0 && ov_backend && strlen(ov_backend) > 0) {
+                llama_detach_threadpool(ctx);
+                llama_free(ctx);
+                ctx = llama_init_from_model(lmodel, cparams);
+                if (!ctx) {
+                    fprintf(stderr, "%s: error: failed to create context\n", __func__);
+                    llama_model_free(lmodel);
+                    exit(1);
+                }
+                llama_attach_threadpool(ctx, threadpool, NULL);
+                // Invalidate cached state since we have a new context
+                cstate.depth = -1;
+            }
+
             llama_memory_clear(llama_get_memory(ctx), false);
 
             if (t.n_depth > 0) {
