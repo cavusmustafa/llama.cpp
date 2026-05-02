@@ -89,8 +89,20 @@ OutputVector translate_permute(const NodeContext & context) {
 
         auto src_reshaped = std::make_shared<ov::op::v1::Reshape>(
             src, ov::op::v0::Constant::create(ov::element::i64, {4}, {n_seq, ctx_per_seq, n_heads, head_size}), false);
-        auto slice1 = std::make_shared<ov::op::v8::Slice>(src_reshaped, seq_active_start, seq_active_end, one, zero);
-        auto slice2 = std::make_shared<ov::op::v8::Slice>(slice1, zero, attention_size, one, one);
+
+        // Opt-S10: when n_seq == 1 (typical single-sequence inference), slice1
+        // (which extracts the "active sequence" sub-range along dim 0) is an
+        // identity op — n_seq_active must also be 1, seq_active_start == 0,
+        // seq_active_end == 1 == n_seq. Skipping it avoids a materialized copy
+        // in the intel_gpu v8::Slice kernel (v8::Slice has no runtime-skippable
+        // fast-path in the plugin, every slice copies).
+        ov::Output<ov::Node> after_seq_slice;
+        if (n_seq == 1) {
+            after_seq_slice = src_reshaped;
+        } else {
+            after_seq_slice = std::make_shared<ov::op::v8::Slice>(src_reshaped, seq_active_start, seq_active_end, one, zero);
+        }
+        auto slice2 = std::make_shared<ov::op::v8::Slice>(after_seq_slice, zero, attention_size, one, one);
         res = std::make_shared<ov::op::v1::Transpose>(slice2, perm);
     }
     return rename_outputs_with_suffix({res}, context.get_name());
