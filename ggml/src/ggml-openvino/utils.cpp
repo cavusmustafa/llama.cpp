@@ -147,7 +147,18 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
                 const auto * inp_pos = get_inp_pos_tensor(cgraph);
                 int32_t * pos_data = (int32_t *) inp_pos->data;
                 auto pos_shape = ggml_decoder->get_shape(inp_pos);
-                if (pos_data[0] == 0) {
+
+                // Reset state when:
+                // 1. Position is 0 (new sequence)
+                // 2. Position jumps backwards significantly (>1 token, indicates sequence restart)
+                bool should_reset = (pos_data[0] == 0);
+                if (!should_reset && r_ctx->stateful_kv_size > 0 &&
+                    static_cast<uint32_t>(pos_data[0]) + 1 < r_ctx->stateful_kv_size) {
+                    // Position jumped backwards - likely a new sequence after memory clear
+                    should_reset = true;
+                }
+
+                if (should_reset) {
                     infer_request->reset_state();
                     r_ctx->stateful_kv_size = pos_shape[3];
                 } else if (r_ctx->stateful_kv_size == static_cast<size_t>(pos_data[0])) {
