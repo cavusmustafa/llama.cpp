@@ -9,6 +9,7 @@
 #include <openvino/op/multiply.hpp>
 #include <openvino/op/sigmoid.hpp>
 #include <openvino/op/slice.hpp>
+#include <openvino/op/split.hpp>
 
 namespace ov {
 namespace frontend {
@@ -32,15 +33,23 @@ OutputVector translate_glu_geglu(const NodeContext & context) {
         int64_t last_dim_val = combined_shape[combined_shape.rank().get_length() - 1].get_length();
         int64_t nc = last_dim_val / 2;
 
-        auto axis   = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
-        auto step   = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
-        auto start0 = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
-        auto stop0  = ov::op::v0::Constant::create(ov::element::i64, {1}, {nc});
-        auto start1 = ov::op::v0::Constant::create(ov::element::i64, {1}, {nc});
-        auto stop1  = ov::op::v0::Constant::create(ov::element::i64, {1}, {2 * nc});
+        // Opt-S11: see glu_swiglu.cpp for rationale. Use Split (view-able) when even.
+        if (last_dim_val == 2 * nc) {
+            auto split_axis = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {-1});
+            auto split = std::make_shared<ov::op::v1::Split>(combined, split_axis, 2);
+            src0 = split->output(0);
+            src1 = split->output(1);
+        } else {
+            auto axis   = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
+            auto step   = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+            auto start0 = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
+            auto stop0  = ov::op::v0::Constant::create(ov::element::i64, {1}, {nc});
+            auto start1 = ov::op::v0::Constant::create(ov::element::i64, {1}, {nc});
+            auto stop1  = ov::op::v0::Constant::create(ov::element::i64, {1}, {2 * nc});
 
-        src0 = std::make_shared<ov::op::v8::Slice>(combined, start0, stop0, step, axis);
-        src1 = std::make_shared<ov::op::v8::Slice>(combined, start1, stop1, step, axis);
+            src0 = std::make_shared<ov::op::v8::Slice>(combined, start0, stop0, step, axis);
+            src1 = std::make_shared<ov::op::v8::Slice>(combined, start1, stop1, step, axis);
+        }
     }
 
     int32_t * params = context.get_output_op_params();
