@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <memory>
 #include <openvino/core/dimension.hpp>
@@ -128,7 +129,8 @@ void GgmlOvDecoder::set_input_output() {
             }
             auto src_name = std::string(src->name);
             if (src->flags & GGML_TENSOR_FLAG_INPUT) {
-                src_name = get_graph_input_ov_name(src, node);
+                src_name = m_naive ? get_graph_input_ov_name(src, node)
+                                   : get_graph_input_ov_name_for(src, node);
             }
             current_node_info.node_inputs[src_name] = src;
             current_node_info.node_inputs_names.push_back(src_name);
@@ -294,6 +296,91 @@ int extract_layer_from_name(const std::string & name) {
     return layer;
 }
 
+const ggml_tensor * GgmlOvDecoder::find_fa_consumer_of_mask(const ggml_tensor * mask) const {
+    if (mask == nullptr || m_cgraph == nullptr) {
+        return nullptr;
+    }
+    // `mask` is either the raw mask input (GGML_OP_NONE) or a CPY of it.
+    // Walk at most one CPY hop and look for the FLASH_ATTN_EXT consumer.
+    auto uses = [](const ggml_tensor * n, const ggml_tensor * t) {
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            if (n->src[j] == t) {
+                return true;
+            }
+        }
+        return false;
+    };
+    for (int k = 0; k < m_cgraph->n_nodes; k++) {
+        const auto * consumer = m_cgraph->nodes[k];
+        if (consumer->op == GGML_OP_FLASH_ATTN_EXT && consumer->src[3] == mask) {
+            return consumer;
+        }
+    }
+    for (int i = 0; i < m_cgraph->n_nodes; i++) {
+        const auto * cpy = m_cgraph->nodes[i];
+        if (cpy->op != GGML_OP_CPY || !uses(cpy, mask)) {
+            continue;
+        }
+        for (int k = 0; k < m_cgraph->n_nodes; k++) {
+            const auto * consumer = m_cgraph->nodes[k];
+            if (consumer->op == GGML_OP_FLASH_ATTN_EXT && consumer->src[3] == cpy) {
+                return consumer;
+            }
+        }
+    }
+    return nullptr;
+}
+
+bool GgmlOvDecoder::mask_is_swa(const ggml_tensor * tensor) const {
+    if (tensor == nullptr) {
+        return false;
+    }
+    // Legacy: some archs tag the SWA mask name with "swa".
+    if (std::string(tensor->name).find("swa") != std::string::npos) {
+        return true;
+    }
+    // With no SWA layers detected there is no SWA mask to pick.
+    if (m_model_params.swa_layers.empty() || m_model_params.ctx_per_seq_swa <= 0) {
+        return false;
+    }
+    // Structural path: walk to the consuming FA op and read its cache layer.
+    // gemma4 names both masks "attn_inp_kq_mask", so this is the only reliable
+    // way to route them to distinct OV parameters.
+    if (const auto * consumer = find_fa_consumer_of_mask(tensor)) {
+        const ggml_tensor * cache_k_view = nullptr;
+        if (consumer->op == GGML_OP_FLASH_ATTN_EXT && consumer->src[1] != nullptr) {
+            if (consumer->src[1]->op == GGML_OP_PERMUTE && consumer->src[1]->src[0] != nullptr &&
+                consumer->src[1]->src[0]->op == GGML_OP_VIEW) {
+                cache_k_view = consumer->src[1]->src[0];
+            } else if (consumer->src[1]->op == GGML_OP_CPY && consumer->src[1]->src[0] != nullptr &&
+                       consumer->src[1]->src[0]->op == GGML_OP_PERMUTE &&
+                       consumer->src[1]->src[0]->src[0] != nullptr &&
+                       consumer->src[1]->src[0]->src[0]->op == GGML_OP_VIEW) {
+                cache_k_view = consumer->src[1]->src[0]->src[0];
+            }
+        }
+        if (cache_k_view != nullptr && cache_k_view->src[0] != nullptr) {
+            try {
+                int layer = extract_layer_from_name(cache_k_view->src[0]->name);
+                return std::find(m_model_params.swa_layers.begin(),
+                                 m_model_params.swa_layers.end(), layer) !=
+                       m_model_params.swa_layers.end();
+            } catch (...) {}
+        }
+    }
+
+    // Fallback: classify by mask ne[0] against the SWA / non-SWA widths. When
+    // widths coincide the mapping is ambiguous and we default to non-SWA.
+    const int swa_width     = m_compute_params.attention_size_swa > 0 ? m_compute_params.attention_size_swa
+                                                                      : m_model_params.ctx_per_seq_swa;
+    const int non_swa_width = m_compute_params.attention_size > 0 ? m_compute_params.attention_size
+                                                                  : m_model_params.ctx_per_seq;
+    if (swa_width == non_swa_width) {
+        return false;
+    }
+    return tensor->ne[0] == swa_width;
+}
+
 std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgraph * cgraph, bool is_static) {
     ModelParams model_params;
     ComputeParams compute_params;
@@ -341,6 +428,23 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
         return -1;
     };
 
+    // FA-like patterns are collected first, then classified in a second pass.
+    // The old logic read "swa" from the mask tensor name to decide SWA vs
+    // non-SWA, but ggml names both gemma4 masks "attn_inp_kq_mask", which
+    // silently misclassified every layer once the two caches had different
+    // ctx sizes (e.g. at llama-bench -d 1024). Classifying by cache ne[1]
+    // instead is architecture-agnostic: if two distinct ne[1] values appear
+    // across patterns the smaller belongs to SWA layers; otherwise every
+    // layer is non-SWA.
+    struct attn_pattern_info {
+        int layer;
+        ggml_tensor * cache_k;
+        ggml_tensor * cache_k_view;
+        ggml_tensor * mask;
+        ggml_tensor * node;
+    };
+    std::vector<attn_pattern_info> attn_patterns;
+
     bool rope_seen = false;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         auto * node = cgraph->nodes[i];
@@ -368,43 +472,9 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             }
 
             assert(cache_k_view != nullptr && mask != nullptr);
-
-            model_params.head_size = cache_k_view->ne[0];
-            model_params.n_heads_kv = cache_k_view->ne[1];
-
-            compute_params.input_len = node->src[0]->ne[1];
-            compute_params.token_len_per_seq = node->ne[2];
-
             ggml_tensor * cache_k = cache_k_view->src[0];
             int layer = extract_layer_from_name(cache_k->name);
-
-            std::string mask_name(mask->name);
-
-            model_params.kv_buffer_ctx_id = ggml_backend_openvino_buffer_get_ctx_id(cache_k->buffer);
-            if (mask_name.find("swa") != std::string::npos) {
-                model_params.swa_layers.push_back(layer);
-                model_params.ctx_per_seq_swa = cache_k->ne[1];
-            } else {
-                model_params.ctx_per_seq = cache_k->ne[1];
-                model_params.n_seq = cache_k->ne[2];
-            }
-
-            compute_params.n_seq_active = mask->ne[3];
-            auto seq_size = cache_k->ne[0] * cache_k->ne[1] * ggml_type_size(cache_k->type);
-            size_t offset;
-            memcpy(&offset, cache_k_view->op_params, sizeof(size_t));
-            compute_params.seq_active_start = offset / seq_size;
-
-            if (mask_name.find("swa") != std::string::npos) {
-                compute_params.attention_size_swa = mask->ne[0];
-            } else {
-                compute_params.attention_size = mask->ne[0];
-            }
-            if (is_static) {
-                compute_params.attention_size = model_params.ctx_per_seq;
-                compute_params.attention_size_swa = model_params.ctx_per_seq_swa;
-                compute_params.token_len_per_seq = 1;
-            }
+            attn_patterns.push_back({layer, cache_k, cache_k_view, mask, node});
         }
 
         if (node->op == GGML_OP_MUL_MAT && node->src[0]->op == GGML_OP_PERMUTE &&
@@ -437,6 +507,55 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             }
         }
     }
+
+    // Second pass: classify SWA vs non-SWA by cache ctx-size divergence and
+    // populate model/compute params accordingly. When ne[1] matches across
+    // all patterns every layer is non-SWA; otherwise the smaller-ne[1] half
+    // is the SWA set.
+    if (!attn_patterns.empty()) {
+        int64_t ne1_min = std::numeric_limits<int64_t>::max();
+        int64_t ne1_max = 0;
+        for (const auto & p : attn_patterns) {
+            ne1_min = std::min(ne1_min, p.cache_k->ne[1]);
+            ne1_max = std::max(ne1_max, p.cache_k->ne[1]);
+        }
+        const bool has_swa = ne1_min != ne1_max;
+
+        for (const auto & p : attn_patterns) {
+            const bool is_swa = has_swa && p.cache_k->ne[1] == ne1_min;
+
+            model_params.head_size  = p.cache_k_view->ne[0];
+            model_params.n_heads_kv = p.cache_k_view->ne[1];
+            compute_params.input_len         = p.node->src[0]->ne[1];
+            compute_params.token_len_per_seq = p.node->ne[2];
+            model_params.kv_buffer_ctx_id    = ggml_backend_openvino_buffer_get_ctx_id(p.cache_k->buffer);
+
+            if (is_swa) {
+                if (std::find(model_params.swa_layers.begin(), model_params.swa_layers.end(), p.layer) ==
+                    model_params.swa_layers.end()) {
+                    model_params.swa_layers.push_back(p.layer);
+                }
+                model_params.ctx_per_seq_swa      = p.cache_k->ne[1];
+                compute_params.attention_size_swa = p.mask->ne[0];
+            } else {
+                model_params.ctx_per_seq      = p.cache_k->ne[1];
+                model_params.n_seq            = p.cache_k->ne[2];
+                compute_params.attention_size = p.mask->ne[0];
+            }
+
+            compute_params.n_seq_active = p.mask->ne[3];
+            auto seq_size = p.cache_k->ne[0] * p.cache_k->ne[1] * ggml_type_size(p.cache_k->type);
+            size_t offset;
+            memcpy(&offset, p.cache_k_view->op_params, sizeof(size_t));
+            compute_params.seq_active_start = offset / seq_size;
+        }
+        if (is_static) {
+            compute_params.attention_size     = model_params.ctx_per_seq;
+            compute_params.attention_size_swa = model_params.ctx_per_seq_swa;
+            compute_params.token_len_per_seq  = 1;
+        }
+    }
+
     auto * output_tensor = cgraph->nodes[cgraph->n_nodes - 1];
     compute_params.output_len = output_tensor->ne[1];
     // for NPU, output_len is always 1 except for llama-perplexity
@@ -588,7 +707,8 @@ void GgmlOvDecoder::compute_model_inputs() {
             }
             std::string src_name = std::string(src->name);
             if (src->flags & GGML_TENSOR_FLAG_INPUT) {
-                src_name = get_graph_input_ov_name(src, node);
+                src_name = m_naive ? get_graph_input_ov_name(src, node)
+                                   : get_graph_input_ov_name_for(src, node);
             }
             if (m_model_weights.find(src_name) != m_model_weights.end()) {
                 continue;

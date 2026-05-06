@@ -72,6 +72,10 @@ enum ggml_status ov_graph_compute(ggml_cgraph * cgraph, ggml_backend_t backend) 
 //     gives a valid tensor over the same host storage
 //   * not an SWA layer (ring cache): once the window has wrapped the first
 //     n_kv rows no longer contain the live prefix
+//   * decode-style step (input_len == 1): during chunked prefill the SET_ROWS
+//     write indices extend past `attention_size` (llama's n_kv covers only
+//     the per-chunk attention window, not the writes whose positions are
+//     past_len + batch), so slicing to n_kv would OOB the ScatterUpdate.
 // On any unmet pre-condition returns std::nullopt; the caller falls back to
 // the full-size tensor.
 static std::optional<ov::Tensor> try_make_kv_sliced_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
@@ -93,6 +97,11 @@ static std::optional<ov::Tensor> try_make_kv_sliced_tensor(std::shared_ptr<GgmlO
 
     const auto & compute_params = ggml_decoder->get_compute_params();
     if (compute_params.n_seq_active != 1 || compute_params.seq_active_start != 0) {
+        return std::nullopt;
+    }
+    // Decode-only: prefill chunks write beyond attention_size so the sliced
+    // dst cannot host the ScatterUpdate update rows.
+    if (compute_params.input_len > 1) {
         return std::nullopt;
     }
 

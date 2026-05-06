@@ -31,9 +31,25 @@ struct ModelParams {
                memcmp(rope_params, other.rope_params, sizeof(int32_t) * 15) == 0;
     }
 
-    bool can_reuse_dynamically(const ModelParams & other) const { return same_rope_params(other); }
+    // A compiled graph bakes the SWA topology and per-layer cache ctx sizes:
+    // the emitted OV parameter set (single vs. dual mask) depends on whether
+    // the two cache sizes coincide, so we must recompile when that changes
+    // between invocations (llama-bench at different -d values).
+    bool same_swa_topology(const ModelParams & other) const {
+        const bool had_swa = !swa_layers.empty();
+        const bool has_swa = !other.swa_layers.empty();
+        return had_swa == has_swa &&
+               ctx_per_seq == other.ctx_per_seq &&
+               ctx_per_seq_swa == other.ctx_per_seq_swa;
+    }
 
-    bool can_reuse_statically(const ModelParams & other) const { return same_rope_params(other) && ctx == other.ctx; }
+    bool can_reuse_dynamically(const ModelParams & other) const {
+        return same_rope_params(other) && same_swa_topology(other);
+    }
+
+    bool can_reuse_statically(const ModelParams & other) const {
+        return same_rope_params(other) && same_swa_topology(other) && ctx == other.ctx;
+    }
 
     bool kv_buffer_changed(const ModelParams & other) const { return kv_buffer_ctx_id != other.kv_buffer_ctx_id; }
 };
@@ -275,6 +291,28 @@ public:
         }
         return tensor->name;
     }
+
+    // Instance version of get_graph_input_ov_name: for mask inputs, resolves
+    // SWA vs non-SWA by walking the graph to the consuming FA op and looking
+    // up the cache layer in m_model_params.swa_layers. This is required for
+    // architectures (e.g. gemma4) that name both masks identically, where the
+    // static "swa"-substring check always picks "self_kq_mask".
+    std::string get_graph_input_ov_name_for(const ggml_tensor * tensor, const ggml_tensor * op) const {
+        if (is_inp_mask(tensor, op)) {
+            return mask_is_swa(tensor) ? "self_kq_mask_swa" : "self_kq_mask";
+        }
+        return get_graph_input_ov_name(tensor, op);
+    }
+
+    // True iff this mask tensor belongs to an SWA layer. Uses two signals in
+    // order: the "swa" substring in the tensor name (legacy), and a structural
+    // walk to the consuming FA op followed by a swa_layers lookup. Falls
+    // through to an ne[0]-vs-width comparison when the consumer walk fails.
+    bool mask_is_swa(const ggml_tensor * tensor) const;
+
+    // Walk forward from a mask tensor (src of CPY) to the FA-like op that
+    // ultimately consumes it. Returns nullptr if no consumer is found.
+    const ggml_tensor * find_fa_consumer_of_mask(const ggml_tensor * mask) const;
 
 private:
     void set_input_output();
