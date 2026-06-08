@@ -64,6 +64,7 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
     const int64_t head_size     = q_shape[3];
     const int64_t factor        = num_heads / num_heads_kv;
 
+
     // Manual GQA attention: enabled by default on GPU in stateless mode.
     // Set GGML_OPENVINO_MANUAL_GQA_ATTN=0 to explicitly disable.
     static const bool manual_gqa_enabled = []() {

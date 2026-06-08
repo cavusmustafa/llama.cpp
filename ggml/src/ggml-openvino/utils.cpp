@@ -7,6 +7,8 @@
 #include "openvino/frontend.h"
 #include "openvino/input_model.h"
 
+#include <unistd.h>
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -177,6 +179,152 @@ ov::Tensor create_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
     return output_tensor;
 }
 
+// Compile-and-run the full cgraph as a sequence of contiguous node chunks, each
+// built/converted/compiled/run as its own OpenVINO model and freed before the next.
+//
+// Why: the CPU plugin materializes (packs/decompresses) every MoE expert weight in
+// the model during a single compile_model call. For a 30-layer MoE this transient
+// is ~17GB on top of the resident weights, OOMing a 30GB box. Splitting the compile
+// into K chunks caps that transient at ~(layers/K) layers' worth of experts.
+//
+// Correctness: ggml_graph_view shares the parent's use_counts + visited_hash_set, so
+// GgmlOvDecoder's boundary detection automatically (a) emits a Parameter for any src
+// produced outside the chunk and (b) emits a Result for any node consumed outside the
+// chunk. All chunks share the same underlying ggml tensors, whose ->data buffers are
+// allocated by the scheduler; chunk N writes a boundary tensor's data and chunk N+1
+// reads the same data, so the residual stream / KV caches flow through ggml buffers
+// with no explicit wiring. Bypasses the decoder cache (recompiles each call).
+static enum ggml_status ov_graph_compute_dynamic_chunked(ggml_cgraph * cgraph,
+                                                         std::shared_ptr<ov_runtime_context> r_ctx,
+                                                         int num_chunks) {
+    auto & core = ov_singleton_core();
+    const auto & config = ggml_openvino_get_compile_config();
+    const auto & device = r_ctx->device;
+    const auto & stateful = r_ctx->stateful;
+    const bool is_static = false;
+    const bool dbg_mem = getenv("GGML_OPENVINO_LOG_MEM") != nullptr;
+    auto rss_mb = [] {
+        long rss = 0;
+        FILE * f = fopen("/proc/self/statm", "r");
+        if (f) { long sz; if (fscanf(f, "%ld %ld", &sz, &rss) != 2) rss = 0; fclose(f); }
+        return rss * (sysconf(_SC_PAGESIZE) / 1024) / 1024;
+    };
+
+    const int n_nodes = cgraph->n_nodes;
+
+    // Chunk boundaries must fall on the clean inter-layer residual stream, never
+    // mid-attention (where tensors are viewed/reshaped per-head and a boundary
+    // Parameter's shape would not match the producing tensor's flat shape). The
+    // residual stream between layers is the "l_out-<N>" node; cut right after each.
+    // Collect candidate cut points (node index just past each l_out-N), then pick
+    // ~num_chunks of them evenly.
+    std::vector<int> layer_ends;  // node index immediately after a layer boundary
+    for (int i = 0; i < n_nodes; i++) {
+        const char * name = cgraph->nodes[i]->name;
+        if (strncmp(name, "l_out", 5) == 0) {
+            layer_ends.push_back(i + 1);
+        }
+    }
+    // Build the actual chunk cut indices: always start at 0, end at n_nodes, with
+    // up to (num_chunks-1) interior cuts chosen from layer_ends.
+    std::vector<int> cuts;
+    cuts.push_back(0);
+    if (!layer_ends.empty() && num_chunks > 1) {
+        const int interior = std::min(num_chunks - 1, (int) layer_ends.size() - 1);
+        for (int k = 1; k <= interior; k++) {
+            int idx = (int) ((int64_t) k * layer_ends.size() / (interior + 1));
+            if (idx >= 1 && idx < (int) layer_ends.size()) {
+                int cut = layer_ends[idx - 1];
+                if (cut > cuts.back() && cut < n_nodes) {
+                    cuts.push_back(cut);
+                }
+            }
+        }
+    }
+    cuts.push_back(n_nodes);
+    const int actual_chunks = (int) cuts.size() - 1;
+
+    // Build the model_weights once for the whole graph (cheap: reuses pre-built
+    // per-tensor weight nodes via tensor->extra), then each chunk picks the subset
+    // it references. This avoids re-extracting weights per chunk.
+    auto all_weights = GgmlOvDecoder::create_weight_nodes(cgraph);
+
+    for (int c = 0; c < actual_chunks; c++) {
+        const int i0 = cuts[c];
+        const int i1 = cuts[c + 1];
+        if (i1 <= i0) {
+            continue;
+        }
+
+        ggml_cgraph view = ggml_graph_view(cgraph, i0, i1);
+
+        ModelParams m_params;
+        ComputeParams c_params;
+        std::tie(m_params, c_params) = GgmlOvDecoder::compute_llm_params(&view, is_static);
+
+        if (dbg_mem) fprintf(stderr, "[MEM] chunk %d/%d nodes[%d,%d): before %ld MB\n",
+                             c + 1, actual_chunks, i0, i1, rss_mb());
+
+        auto ggml_decoder = std::make_shared<GgmlOvDecoder>(&view, m_params, c_params, all_weights, is_static,
+                                                            stateful, /*model_is_splitted=*/false);
+        auto input_model = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder);
+        auto model = ov::frontend::ggml::FrontEnd::convert(input_model);
+
+        ov::CompiledModel compiled_model;
+        auto remote_context = ggml_openvino_get_remote_context();
+        if (remote_context.has_value()) {
+            compiled_model = core.compile_model(model, remote_context.value(), config);
+        } else {
+            compiled_model = core.compile_model(model, device, config);
+        }
+        auto infer_request = std::make_shared<ov::InferRequest>(compiled_model.create_infer_request());
+
+        std::vector<std::string> ov_input_names;
+        std::vector<std::string> ov_output_names;
+        for (const auto & ov_param : model->get_parameters()) {
+            ov_input_names.push_back(ov_param->get_friendly_name());
+        }
+        for (const auto & ov_output : model->get_results()) {
+            ov_output_names.push_back(ov_output->get_friendly_name());
+        }
+
+        for (size_t i = 0; i < ov_input_names.size(); i++) {
+            auto input_tensor = get_ov_input_tensor(ggml_decoder, ov_input_names[i]);
+            infer_request->set_input_tensor(i, input_tensor);
+        }
+        for (size_t i = 0; i < ov_output_names.size(); i++) {
+            auto * ggml_tensor = ggml_decoder->get_model_outputs().at(ov_output_names[i]);
+            if (ggml_nbytes(ggml_tensor) == 0) {
+                continue;
+            }
+            auto output_tensor = create_ov_output_tensor(ggml_decoder, infer_request, i, ggml_tensor);
+            infer_request->set_output_tensor(i, output_tensor);
+        }
+
+        infer_request->infer();
+
+        if (dbg_mem) fprintf(stderr, "[MEM] chunk %d/%d: after infer %ld MB\n", c + 1, actual_chunks, rss_mb());
+
+        if (getenv("GGML_OPENVINO_DUMP_CHKSUM")) {
+            for (size_t i = 0; i < ov_output_names.size(); i++) {
+                auto * t = ggml_decoder->get_model_outputs().at(ov_output_names[i]);
+                if (ggml_nbytes(t) == 0 || t->type != GGML_TYPE_F32) {
+                    continue;
+                }
+                const float * d = (const float *) t->data;
+                size_t n = ggml_nelements(t);
+                double sum = 0; float v0 = n > 0 ? d[0] : 0, v1 = n > 1 ? d[1] : 0;
+                for (size_t j = 0; j < n; j++) sum += d[j];
+                fprintf(stderr, "[CHK] %-28s n=%zu sum=%.5f [0]=%.5f [1]=%.5f\n",
+                        ov_output_names[i].c_str(), n, sum, v0, v1);
+            }
+        }
+        // compiled_model / infer_request / model freed at end of iteration scope.
+    }
+
+    return GGML_STATUS_SUCCESS;
+}
+
 enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<ov_runtime_context> r_ctx) {
     auto & core = ov_singleton_core();
     const auto & config = ggml_openvino_get_compile_config();
@@ -187,6 +335,15 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
     if (is_naive(cgraph)) {
         if (!is_model_splitted(cgraph)) {
             return naive_compute(cgraph, core, device, config);
+        }
+    }
+
+    // Chunked compilation (opt-in): split the full graph into N submodels to cap the
+    // CPU-plugin compile-time memory spike. Only for the full (non-splitted) LLM graph.
+    if (const char * nc = getenv("GGML_OPENVINO_COMPILE_CHUNKS")) {
+        int num_chunks = atoi(nc);
+        if (num_chunks > 1 && !is_model_splitted(cgraph)) {
+            return ov_graph_compute_dynamic_chunked(cgraph, r_ctx, num_chunks);
         }
     }
 
@@ -305,8 +462,18 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
             }
             bool model_is_splitted = is_model_splitted(cgraph);
 
+            auto rss_mb = [] {
+                long rss = 0;
+                FILE * f = fopen("/proc/self/statm", "r");
+                if (f) { long sz; if (fscanf(f, "%ld %ld", &sz, &rss) != 2) rss = 0; fclose(f); }
+                return rss * (sysconf(_SC_PAGESIZE) / 1024) / 1024;
+            };
+            const bool dbg_mem = getenv("GGML_OPENVINO_LOG_MEM") != nullptr;
+            if (dbg_mem) fprintf(stderr, "[MEM] before create_weight_nodes: %ld MB\n", rss_mb());
+
             std::shared_ptr<ov::Model> model;
             auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph);
+            if (dbg_mem) fprintf(stderr, "[MEM] after create_weight_nodes: %ld MB\n", rss_mb());
 
             ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights, is_static, stateful, model_is_splitted);
             decoder_end_time = ggml_time_us();
@@ -315,6 +482,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
             model = ov::frontend::ggml::FrontEnd::convert(input_model);
             ggml_decoder->clear_model_weights();
             conversion_end_time = ggml_time_us();
+            if (dbg_mem) fprintf(stderr, "[MEM] after convert: %ld MB\n", rss_mb());
 
             if (getenv("GGML_OPENVINO_DUMP_IR")) {
                 char timestamped_filename[64];
@@ -330,6 +498,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
             } else {
                 compiled_model = core.compile_model(model, device, config);
             }
+            if (dbg_mem) fprintf(stderr, "[MEM] after compile_model: %ld MB\n", rss_mb());
             compile_end_time = ggml_time_us();
             infer_request = std::make_shared<ov::InferRequest>(compiled_model.create_infer_request());
             entry->ptr = ggml_decoder;

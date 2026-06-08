@@ -25,6 +25,7 @@
 #include <openvino/op/constant.hpp>
 #include <openvino/op/convert.hpp>
 #include <openvino/op/parameter.hpp>
+#include <openvino/op/reshape.hpp>
 #include <openvino/runtime/tensor.hpp>
 #include <ostream>
 #include <set>
@@ -827,6 +828,43 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor
         return weight_node;
     }
 
+    // MUL_MAT_ID expert weights are 3D quantized GGML tensors [k, m, n_expert].
+    // A contiguous 3D quantized tensor is laid out in memory exactly like a 2D
+    // [n_expert*m, k] quantized tensor (expert-major rows, each row quantized
+    // along k). So we dequantize it with the regular 2D weight path — which keeps
+    // the weights compressed (a single u8/u4 Constant + broadcast scale/zp), unlike
+    // a per-expert Concat that would force OV to const-fold a huge f32 blob — and
+    // then reshape the f32 result to [n_expert, m, k]. translate_mul_mat_id reshapes
+    // this to [1, n_expert, m, k].
+    if (ggml_is_quantized(tensor->type) && tensor->ne[2] > 1) {
+        GGML_ASSERT(tensor->ne[3] == 1 && "4D quantized expert weights are not supported");
+        GGML_ASSERT(ggml_is_contiguous(tensor) && "expert weights must be contiguous to flatten");
+        const int64_t n_expert = tensor->ne[2];
+        const int64_t m = tensor->ne[1];
+        const int64_t k = tensor->ne[0];
+
+        // 2D view [k, n_expert*m] over the same data (ne[0]=k, ne[1]=n_expert*m).
+        ggml_tensor flat_tensor = *tensor;
+        flat_tensor.ne[1] = n_expert * m;
+        flat_tensor.ne[2] = 1;
+        flat_tensor.ne[3] = 1;
+        flat_tensor.nb[2] = ggml_nbytes(tensor);
+        flat_tensor.nb[3] = ggml_nbytes(tensor);
+
+        // Match the 2D weight path's use_bias=naive: test-backend-ops (naive) uses the
+        // accurate f16-bias dequant, production uses quantized zero points.
+        OvWeight flat_weight = process_weight_tensor(&flat_tensor, tensor->data, nullptr, naive);
+
+        // Reshape dequantized [n_expert*m, k] -> [1, n_expert, m, k] to match the
+        // reversed-GGML 4D shape that the non-quantized expert path and
+        // translate_mul_mat_id expect.
+        auto target_shape = ov::op::v0::Constant::create(
+            ov::element::i64, {4}, std::vector<int64_t>{1, n_expert, m, k});
+        auto reshaped = std::make_shared<ov::op::v1::Reshape>(flat_weight.weight_node, target_shape, false);
+        reshaped->set_friendly_name(tensor->name);
+        return reshaped;
+    }
+
     // There are three cases where we need to create a new weight node:
     // 1. weights are in openvino_host_buffer. Weight loading to host buffer will not trigger backend_buffer_set_tensor
     // 2. weights are in cpu/cpu_mapped buffer. On token_embd.weight goes to case 1 or 2, depending on whether mmap or direct_io is used
@@ -835,7 +873,8 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor
     // GGML_LOG_DEBUG("%s: creating new weight node for %s\n", __func__, tensor->name);
     static const std::set<ggml_type> weight_types = {GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16,
                                                      GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1,
-                                                     GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K};
+                                                     GGML_TYPE_Q5_1, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K,
+                                                     GGML_TYPE_Q6_K};
     if (weight_types.find(tensor->type) == weight_types.end()) {
         throw std::runtime_error("Unexpected weight tensor type: " + std::string(tensor->name) + " with type " +
                                  ggml_type_name(tensor->type));
@@ -1294,6 +1333,7 @@ std::string GgmlOvDecoder::compute_op_type(const ggml_tensor * node) {
         {GGML_OP_SSM_CONV,        "GGML_OP_SSM_CONV"       },
         {GGML_OP_GATED_DELTA_NET, "GGML_OP_GATED_DELTA_NET"},
         {GGML_OP_ARGSORT,         "GGML_OP_ARGSORT"        },
+        {GGML_OP_REPEAT,          "GGML_OP_REPEAT"         },
         {GGML_OP_IM2COL,          "GGML_OP_IM2COL"         }
     };
     static const std::map<ggml_unary_op, std::string> unary_ops = {

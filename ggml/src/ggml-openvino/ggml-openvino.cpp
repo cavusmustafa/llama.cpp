@@ -15,6 +15,9 @@
 #include <memory>
 #include <mutex>
 #include <openvino/core/type/element_type.hpp>
+#include <openvino/op/constant.hpp>
+#include <openvino/op/reshape.hpp>
+#include <openvino/pass/constant_folding.hpp>
 #include <openvino/openvino.hpp>
 #include <openvino/runtime/allocator.hpp>
 #include <openvino/runtime/intel_gpu/ocl/ocl.hpp>
@@ -222,6 +225,36 @@ static void ggml_backend_openvino_buffer_memset_tensor(ggml_backend_buffer_t buf
     }
 }
 
+// Walk back from a dequantized weight node through its decompression chain
+// (Reshape / Convert / Multiply / Subtract / Add) and disable constant folding on
+// each op, stopping at the low-bit weight Constant. Without this, the CPU plugin
+// folds the whole u4/u8 -> f16 -> f32 dequant subgraph into a single huge f32
+// constant at compile_model time, which spikes memory (~8x for 4-bit) and OOMs
+// large MoE expert weights. Disabling folding keeps the weights compressed and
+// dequantizes them on the fly during inference.
+static void disable_decompression_folding(const std::shared_ptr<ov::Node> & root) {
+    std::vector<std::shared_ptr<ov::Node>> stack{root};
+    std::set<ov::Node *> seen;
+    int guard = 0;
+    while (!stack.empty() && guard++ < 64) {
+        auto node = stack.back();
+        stack.pop_back();
+        if (!node || !seen.insert(node.get()).second) {
+            continue;
+        }
+        const std::string t = node->get_type_name();
+        const bool is_chain = (t == "Reshape" || t == "Convert" || t == "Multiply" || t == "Subtract" ||
+                               t == "Add" || t == "Unsqueeze");
+        if (!is_chain) {
+            continue;  // reached the weight Constant / scale / zp boundary
+        }
+        ov::pass::disable_constant_folding(node);
+        for (size_t i = 0; i < node->get_input_size(); ++i) {
+            stack.push_back(node->get_input_node_shared_ptr(i));
+        }
+    }
+}
+
 static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer,
                                                     ggml_tensor * tensor,
                                                     const void * data,
@@ -235,12 +268,37 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
     bool is_weight_buffer = (buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
     // Full tensor set: offset=0, full size, not a view
     bool is_full_tensor_set = (offset == 0 && size == ggml_nbytes(tensor) && tensor->view_src == nullptr);
-    // 2D tensor (typical weight shape)
+    // 2D weight, or 3D MoE expert weight [k, m, n_expert] handled as flattened 2D.
     bool is_2d = (tensor->ne[2] == 1 && tensor->ne[3] == 1);
+    bool is_3d_expert = (tensor->ne[2] > 1 && tensor->ne[3] == 1 && ggml_is_quantized(tensor->type));
 
-    if (is_weight_buffer && is_full_tensor_set && is_2d) {
+    if (is_weight_buffer && is_full_tensor_set && (is_2d || is_3d_expert)) {
         try {
-            auto result = process_weight_tensor(tensor, data, tensor->data);
+            // Flatten 3D expert weights [k, m, n_expert] -> 2D [k, n_expert*m] so the
+            // extracted data is written in-place into this backend buffer (avoiding a
+            // large extra allocation), then reshape the dequant node back to 4D.
+            ggml_tensor proc_tensor = *tensor;
+            const int64_t n_expert = tensor->ne[2];
+            const int64_t m = tensor->ne[1];
+            const int64_t k = tensor->ne[0];
+            if (is_3d_expert) {
+                GGML_ASSERT(ggml_is_contiguous(tensor) && "3D expert weights must be contiguous");
+                proc_tensor.ne[1] = n_expert * m;
+                proc_tensor.ne[2] = 1;
+                proc_tensor.nb[2] = ggml_nbytes(tensor);
+                proc_tensor.nb[3] = ggml_nbytes(tensor);
+            }
+
+            auto result = process_weight_tensor(&proc_tensor, data, tensor->data);
+            if (is_3d_expert) {
+                auto target_shape = ov::op::v0::Constant::create(ov::element::i64, {4},
+                                                                 std::vector<int64_t>{1, n_expert, m, k});
+                result.weight_node =
+                    std::make_shared<ov::op::v1::Reshape>(result.weight_node, target_shape, false);
+                // Keep the large expert weights compressed through compile_model:
+                // stop the CPU plugin from folding the dequant chain into f32.
+                disable_decompression_folding(result.weight_node);
+            }
             result.weight_node->set_friendly_name(tensor->name);
 
             // const auto & layout = result.layout;
@@ -460,8 +518,9 @@ static size_t ggml_backend_openvino_buffer_type_get_alloc_size(ggml_backend_buff
                                                                const ggml_tensor * tensor) {
     GGML_UNUSED(buft);
 
-    // For quantized 2D tensors (weights), we need extra space for extracted data
-    if (ggml_is_quantized(tensor->type) && tensor->ne[2] == 1 && tensor->ne[3] == 1) {
+    // For quantized 2D weights (and 3D MoE expert weights, handled as flattened 2D),
+    // we need extra space for the extracted data written in-place into this buffer.
+    if (ggml_is_quantized(tensor->type) && tensor->ne[3] == 1) {
         ggml_openvino_extracted_layout layout = ggml_openvino_get_extracted_layout(tensor);
         if (layout.total_size > 0) {
             // GGML_LOG_DEBUG("%s: tensor %s needs %zu bytes (original %zu, extracted: weights=%zu scales=%zu zp=%zu)\n",
@@ -863,7 +922,12 @@ static bool mul_mat_id_requires_large_tmp(const ggml_tensor * op) {
 
     // The current OpenVINO translation materializes selected expert weights with
     // shape [n_tokens, n_used, rows, k]. Skip cases that would create a very
-    // large temporary on GPU and let the scheduler fall back instead.
+    // large temporary on GPU and let the scheduler fall back instead. The CPU
+    // device can handle the large intermediate, so only apply this cap on GPU.
+    if (ggml_openvino_get_device_name() != "GPU") {
+        return false;
+    }
+
     size_t tmp_elems = 1;
     if (!checked_mul_size(tmp_elems, static_cast<size_t>(ids->ne[1]), tmp_elems) ||
         !checked_mul_size(tmp_elems, static_cast<size_t>(ids->ne[0]), tmp_elems) ||
@@ -896,8 +960,10 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
 
         // Keep the MoE routing weights gather on CPU for GPU runs. Splitting
         // only at the later SUM/CLAMP/DIV nodes still leaves this routing path
-        // numerically unstable for arctic-style MoE graphs.
-        if (strncmp(op->name, "ffn_moe_weights", sizeof("ffn_moe_weights") - 1) == 0) {
+        // numerically unstable for arctic-style MoE graphs. The CPU device path
+        // is numerically stable, so only force this off on GPU.
+        if (ggml_openvino_get_device_name() == "GPU" &&
+            strncmp(op->name, "ffn_moe_weights", sizeof("ffn_moe_weights") - 1) == 0) {
             return true;
         }
         break;
@@ -944,7 +1010,8 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
 
         // qwen3next MoE weight normalization is numerically sensitive on the GPU
         // path. Keep the normalization divide on CPU to match the reference.
-        if (strncmp(op->name, "ffn_moe_weights_norm", sizeof("ffn_moe_weights_norm") - 1) == 0) {
+        if (ggml_openvino_get_device_name() == "GPU" &&
+            strncmp(op->name, "ffn_moe_weights_norm", sizeof("ffn_moe_weights_norm") - 1) == 0) {
             return true;
         }
         break;
@@ -955,7 +1022,8 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
             return true;
         }
 
-        if (strncmp(op->name, "ffn_moe_probs", sizeof("ffn_moe_probs") - 1) == 0) {
+        if (ggml_openvino_get_device_name() == "GPU" &&
+            strncmp(op->name, "ffn_moe_probs", sizeof("ffn_moe_probs") - 1) == 0) {
             return true;
         }
 
@@ -970,7 +1038,8 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_SUM_ROWS: {
-        if (strncmp(op->name, "ffn_moe_weights_sum", sizeof("ffn_moe_weights_sum") - 1) == 0) {
+        if (ggml_openvino_get_device_name() == "GPU" &&
+            strncmp(op->name, "ffn_moe_weights_sum", sizeof("ffn_moe_weights_sum") - 1) == 0) {
             return true;
         }
 
@@ -981,7 +1050,8 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
          break;
     }
     case GGML_OP_CLAMP: {
-        if (strncmp(op->name, "ffn_moe_weights_sum_clamped", sizeof("ffn_moe_weights_sum_clamped") - 1) == 0) {
+        if (ggml_openvino_get_device_name() == "GPU" &&
+            strncmp(op->name, "ffn_moe_weights_sum_clamped", sizeof("ffn_moe_weights_sum_clamped") - 1) == 0) {
             return true;
         }
         break;
@@ -1066,8 +1136,12 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_MUL_MAT_ID: {
-        if (strncmp(op->name, "ffn_moe_gate_up", sizeof("ffn_moe_gate_up") - 1) == 0 ||
-            strncmp(op->name, "ffn_moe_down", sizeof("ffn_moe_down") - 1) == 0) {
+        // ffn_moe_gate_up / ffn_moe_down expert matmuls were previously forced to
+        // CPU. With 3D quantized expert-weight dequantization in create_weight_node,
+        // they can run on the OpenVINO CPU path. Keep them on CPU only for GPU.
+        if (ggml_openvino_get_device_name() == "GPU" &&
+            (strncmp(op->name, "ffn_moe_gate_up", sizeof("ffn_moe_gate_up") - 1) == 0 ||
+             strncmp(op->name, "ffn_moe_down", sizeof("ffn_moe_down") - 1) == 0)) {
             return true;
         }
 
@@ -1154,12 +1228,12 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
     return false;
 }
 
-static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+static bool ggml_backend_openvino_device_supports_op_impl(ggml_backend_dev_t dev, const ggml_tensor * op) {
     GGML_ASSERT(dev->reg != nullptr);
 
     static std::set<ggml_type> supported_types{GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16, GGML_TYPE_I64,
                                                GGML_TYPE_I32,  GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_K,
-                                               GGML_TYPE_Q5_K, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K};
+                                               GGML_TYPE_Q5_1, GGML_TYPE_Q5_K, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K};
 
     static const std::set<ggml_op> supported_ops{GGML_OP_NONE,
                                                  GGML_OP_ADD,
@@ -1188,6 +1262,8 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
                                                  GGML_OP_PAD,
                                                  GGML_OP_SSM_CONV,
                                                  GGML_OP_GATED_DELTA_NET,
+                                                 GGML_OP_ARGSORT,
+                                                 GGML_OP_REPEAT,
                                                  GGML_OP_IM2COL};
     static const std::set<ggml_unary_op> supported_unary_ops{
         GGML_UNARY_OP_GELU,
@@ -1215,7 +1291,7 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
             // GGML_LOG_WARN("OpenVINO backend does not support GLU op %s\n", ggml_glu_op_name(ggml_get_glu_op(op)));
             return false;
         }
-        if (has_view_op_input(op)) {
+        if (ggml_openvino_get_device_name() == "GPU" && has_view_op_input(op)) {
             // GGML_LOG_WARN("OpenVINO backend does not support unary op %s with view input\n",
             //               ggml_glu_op_name(ggml_get_glu_op(op)));
             return false;
@@ -1259,8 +1335,12 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
             return false;
         }
         if (ggml_is_quantized(src->type) && src->ne[2] != 1) {
-            // GGML_LOG_WARN("OpenVINO backend does not support 3D quantized tensors\n");
-            return false;
+            // 3D quantized tensors are only supported as MUL_MAT_ID expert weights
+            // (src[0]), which are dequantized per-expert in create_weight_node.
+            if (!(op->op == GGML_OP_MUL_MAT_ID && i == 0)) {
+                // GGML_LOG_WARN("OpenVINO backend does not support 3D quantized tensors\n");
+                return false;
+            }
         }
     }
 
@@ -1268,6 +1348,19 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
         return false;
     }
     return true;
+}
+
+static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+    const bool supported = ggml_backend_openvino_device_supports_op_impl(dev, op);
+    if (!supported && getenv("GGML_OPENVINO_LOG_UNSUPPORTED")) {
+        const char * op_name = op->op == GGML_OP_UNARY ? ggml_unary_op_name(ggml_get_unary_op(op))
+                             : op->op == GGML_OP_GLU   ? ggml_glu_op_name(ggml_get_glu_op(op))
+                                                       : ggml_op_name(op->op);
+        GGML_LOG_WARN("OpenVINO backend UNSUPPORTED op: %-18s name=%-40s type=%s ne=[%ld,%ld,%ld,%ld]\n",
+                      op_name, op->name, ggml_type_name(op->type),
+                      (long) op->ne[0], (long) op->ne[1], (long) op->ne[2], (long) op->ne[3]);
+    }
+    return supported;
 }
 
 static bool ggml_backend_openvino_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {

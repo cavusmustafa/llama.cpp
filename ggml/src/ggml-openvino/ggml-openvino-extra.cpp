@@ -8,6 +8,7 @@
 #include <openvino/runtime/intel_npu/level_zero/level_zero.hpp>
 #include <openvino/runtime/properties.hpp>
 #include <optional>
+#include <string>
 
 ov::Core & ov_singleton_core() {
     static ov::Core core;
@@ -50,6 +51,32 @@ void ggml_openvino_device_config::init() {
     } else if (cache_dir && strlen(cache_dir) > 0) {
         compile_config.insert(ov::cache_dir(cache_dir));
         compile_config.insert(ov::cache_mode(ov::CacheMode::OPTIMIZE_SIZE));
+    }
+
+    if (device_name == "CPU") {
+        // Opt-in CPU memory/precision knobs (default OFF to preserve accuracy and
+        // the original compile behavior — these did not reduce the MoE compile-time
+        // memory spike in practice; see the compile_model OOM investigation).
+        //
+        // GGML_OPENVINO_INFERENCE_PRECISION = f16|bf16|f32 (default: unset → plugin
+        // default). NOTE: f16 noticeably hurts accuracy on test-backend-ops, so it
+        // is NOT enabled by default.
+        if (const char * prec = getenv("GGML_OPENVINO_INFERENCE_PRECISION")) {
+            std::string prec_str = prec;
+            if (prec_str == "f32") {
+                compile_config.insert(ov::hint::inference_precision(ov::element::f32));
+            } else if (prec_str == "f16") {
+                compile_config.insert(ov::hint::inference_precision(ov::element::f16));
+                compile_config.insert(ov::hint::execution_mode(ov::hint::ExecutionMode::PERFORMANCE));
+            } else if (prec_str == "bf16") {
+                compile_config.insert(ov::hint::inference_precision(ov::element::bf16));
+                compile_config.insert(ov::hint::execution_mode(ov::hint::ExecutionMode::PERFORMANCE));
+            }
+        }
+        // On-the-fly grouped dynamic dequantization (opt-in).
+        if (const char * g = getenv("GGML_OPENVINO_DYN_QUANT_GROUP")) {
+            compile_config.insert(ov::hint::dynamic_quantization_group_size(atoi(g)));
+        }
     }
 
     // Initialize remote context with queue sharing for GPU
@@ -173,12 +200,30 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
         return std::nullopt;
     }
     if (strncmp(tensor->name, "token_embd.weight", 17) == 0) {
+        // On CPU/GPU, requantizing token_embd to channel-wise Q8_0_C (one scale per
+        // 2816-wide row) loses precision on the many small embedding values (they
+        // round to 0), measurably degrading output quality. Keep native extraction
+        // (per-32 block scales) on non-NPU. NPU still needs the requant for layout.
+        // Override with GGML_OPENVINO_EMBD_REQUANT=1.
+        if (!ggml_openvino_is_npu() && !getenv("GGML_OPENVINO_EMBD_REQUANT")) {
+            return std::nullopt;
+        }
         return ((ggml_openvino_is_npu() && tensor->type == GGML_TYPE_Q6_K) ? ExtraQuantType::F16 : ExtraQuantType::Q8_0_C);
     }
     if (strncmp(tensor->name, "output.weight", 13) == 0) {
         return ExtraQuantType::Q8_0_C;
     }
     if (ggml_openvino_is_npu()) {
+        return ExtraQuantType::Q4_0_128;
+    }
+    // MoE expert weights (3D [k, m, n_expert]). Optionally requantize them to Q4_0
+    // block=128 (u4) to shrink the extracted footprint. DEFAULT OFF: requant to Q4_0
+    // measurably degrades 26B output quality (produces garbage tokens), so native
+    // extraction (direct bit-unpack of the original Q4_K/Q5_1, no accuracy loss) is
+    // the default. Set GGML_OPENVINO_REQUANT_EXPERTS=1 to opt into the smaller form.
+    if (getenv("GGML_OPENVINO_REQUANT_EXPERTS") &&
+        std::string(getenv("GGML_OPENVINO_REQUANT_EXPERTS")) != "0" &&
+        tensor->ne[2] > 1 && tensor->ne[3] == 1) {
         return ExtraQuantType::Q4_0_128;
     }
     switch (tensor->type) {
@@ -202,8 +247,10 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
         return layout;
     }
 
-    // Only handle 2D weight tensors
-    if (tensor->ne[2] != 1 || tensor->ne[3] != 1) {
+    // Handle 2D weight tensors, and 3D MoE expert weights [k, m, n_expert] which
+    // are treated as a flattened 2D [n_expert*m, k] tensor (each row is quantized
+    // independently along k, so the block layout is identical when flattened).
+    if (tensor->ne[3] != 1) {
         return layout;
     }
 
@@ -296,6 +343,10 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
 
     case GGML_TYPE_Q8_0:
         layout.is_symmetric = true;
+        break;
+
+    case GGML_TYPE_Q5_1:
+        // u8 weights (5-bit values), asymmetric (scale + zero point)
         break;
 
     case GGML_TYPE_Q6_K:
