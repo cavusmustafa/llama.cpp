@@ -225,36 +225,6 @@ static void ggml_backend_openvino_buffer_memset_tensor(ggml_backend_buffer_t buf
     }
 }
 
-// Walk back from a dequantized weight node through its decompression chain
-// (Reshape / Convert / Multiply / Subtract / Add) and disable constant folding on
-// each op, stopping at the low-bit weight Constant. Without this, the CPU plugin
-// folds the whole u4/u8 -> f16 -> f32 dequant subgraph into a single huge f32
-// constant at compile_model time, which spikes memory (~8x for 4-bit) and OOMs
-// large MoE expert weights. Disabling folding keeps the weights compressed and
-// dequantizes them on the fly during inference.
-static void disable_decompression_folding(const std::shared_ptr<ov::Node> & root) {
-    std::vector<std::shared_ptr<ov::Node>> stack{root};
-    std::set<ov::Node *> seen;
-    int guard = 0;
-    while (!stack.empty() && guard++ < 64) {
-        auto node = stack.back();
-        stack.pop_back();
-        if (!node || !seen.insert(node.get()).second) {
-            continue;
-        }
-        const std::string t = node->get_type_name();
-        const bool is_chain = (t == "Reshape" || t == "Convert" || t == "Multiply" || t == "Subtract" ||
-                               t == "Add" || t == "Unsqueeze");
-        if (!is_chain) {
-            continue;  // reached the weight Constant / scale / zp boundary
-        }
-        ov::pass::disable_constant_folding(node);
-        for (size_t i = 0; i < node->get_input_size(); ++i) {
-            stack.push_back(node->get_input_node_shared_ptr(i));
-        }
-    }
-}
-
 static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer,
                                                     ggml_tensor * tensor,
                                                     const void * data,
@@ -283,22 +253,37 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
             const int64_t k = tensor->ne[0];
             if (is_3d_expert) {
                 GGML_ASSERT(ggml_is_contiguous(tensor) && "3D expert weights must be contiguous");
-                proc_tensor.ne[1] = n_expert * m;
+                // View the contiguous 3D expert tensor [k, m, n_expert] as a 2D tensor
+                // [m*k, n_expert] (ne[0]=m*k, ne[1]=n_expert): one quantized "row" of
+                // m*k weights per expert. This is bit-identical to the per-k-row
+                // quantization because k is a whole number of quant super-blocks for
+                // every expert type here (Q4_K: k%256==0, Q5_1: k%32==0), so regrouping
+                // the blocks does not change any block's contents.
+                //
+                // The 2D weight path then yields a rank-2 [n_expert, m*k] dequant
+                // subgraph: Constant(u4/u8) -> Convert -> [Subtract(zp)] -> Multiply
+                //   -> Reshape(3D->2D) -> Convert(f32).
+                // translate_mul_mat_id gathers experts on axis 0 of this node DIRECTLY,
+                // which lets the CPU plugin's ConvertGatherToGatherCompressed pass fuse
+                // the gather + dequant into a single GatherCompressed op. That keeps the
+                // weights COMPRESSED through compile_model and decompresses only the
+                // selected experts at runtime. Reshaping the dequant output to a 4D
+                // [1,n_expert,m,k] (the previous approach) breaks the fusion, so the
+                // plugin const-folds the entire decompressed constant (~87GB f32 for 30
+                // layers x 128 experts) and OOMs — disable_constant_folding does NOT
+                // help there (it just keeps both compressed and f32 copies).
+                proc_tensor.ne[0] = m * k;
+                proc_tensor.ne[1] = n_expert;
                 proc_tensor.ne[2] = 1;
+                proc_tensor.nb[1] = ggml_row_size(tensor->type, m * k);
                 proc_tensor.nb[2] = ggml_nbytes(tensor);
                 proc_tensor.nb[3] = ggml_nbytes(tensor);
             }
 
             auto result = process_weight_tensor(&proc_tensor, data, tensor->data);
-            if (is_3d_expert) {
-                auto target_shape = ov::op::v0::Constant::create(ov::element::i64, {4},
-                                                                 std::vector<int64_t>{1, n_expert, m, k});
-                result.weight_node =
-                    std::make_shared<ov::op::v1::Reshape>(result.weight_node, target_shape, false);
-                // Keep the large expert weights compressed through compile_model:
-                // stop the CPU plugin from folding the dequant chain into f32.
-                disable_decompression_folding(result.weight_node);
-            }
+            // For 3D experts, leave result.weight_node as the rank-2 [n_expert, m*k]
+            // dequant node — translate_mul_mat_id handles the expert gather and the
+            // m*k -> m,k split. Do NOT reshape to 4D or disable folding here.
             result.weight_node->set_friendly_name(tensor->name);
 
             // const auto & layout = result.layout;

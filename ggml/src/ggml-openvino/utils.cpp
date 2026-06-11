@@ -308,15 +308,29 @@ static enum ggml_status ov_graph_compute_dynamic_chunked(ggml_cgraph * cgraph,
         if (getenv("GGML_OPENVINO_DUMP_CHKSUM")) {
             for (size_t i = 0; i < ov_output_names.size(); i++) {
                 auto * t = ggml_decoder->get_model_outputs().at(ov_output_names[i]);
-                if (ggml_nbytes(t) == 0 || t->type != GGML_TYPE_F32) {
+                if (ggml_nbytes(t) == 0) {
                     continue;
                 }
-                const float * d = (const float *) t->data;
-                size_t n = ggml_nelements(t);
-                double sum = 0; float v0 = n > 0 ? d[0] : 0, v1 = n > 1 ? d[1] : 0;
-                for (size_t j = 0; j < n; j++) sum += d[j];
-                fprintf(stderr, "[CHK] %-28s n=%zu sum=%.5f [0]=%.5f [1]=%.5f\n",
-                        ov_output_names[i].c_str(), n, sum, v0, v1);
+
+                // For F32 tensors, compute sum and print first few values
+                if (t->type == GGML_TYPE_F32) {
+                    const float * d = (const float *) t->data;
+                    size_t n = ggml_nelements(t);
+                    double sum = 0;
+                    for (size_t j = 0; j < n; j++) sum += d[j];
+                    fprintf(stderr, "[CHK] %-28s n=%zu sum=%.5f [0]=%.5f [1]=%.5f [2]=%.5f [3]=%.5f\n",
+                            ov_output_names[i].c_str(), n, sum,
+                            n > 0 ? d[0] : 0, n > 1 ? d[1] : 0, n > 2 ? d[2] : 0, n > 3 ? d[3] : 0);
+                }
+                // For I32 tensors (e.g., argsort/topk indices), print first few values
+                else if (t->type == GGML_TYPE_I32) {
+                    const int32_t * d = (const int32_t *) t->data;
+                    size_t n = ggml_nelements(t);
+                    fprintf(stderr, "[CHK] %-28s n=%zu (I32) [0]=%d [1]=%d [2]=%d [3]=%d [4]=%d [5]=%d [6]=%d [7]=%d\n",
+                            ov_output_names[i].c_str(), n,
+                            n > 0 ? d[0] : -1, n > 1 ? d[1] : -1, n > 2 ? d[2] : -1, n > 3 ? d[3] : -1,
+                            n > 4 ? d[4] : -1, n > 5 ? d[5] : -1, n > 6 ? d[6] : -1, n > 7 ? d[7] : -1);
+                }
             }
         }
         // compiled_model / infer_request / model freed at end of iteration scope.

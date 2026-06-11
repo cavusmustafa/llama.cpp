@@ -691,6 +691,19 @@ void GgmlOvDecoder::compute_model_outputs() {
         if (cur_node->op == GGML_OP_NONE || cur_node->op == GGML_OP_VIEW || cur_node->op == GGML_OP_RESHAPE) {
             continue;
         }
+
+        // For debugging: force-output MoE routing tensors when DUMP_CHKSUM is set
+        if (getenv("GGML_OPENVINO_DUMP_CHKSUM") && cur_node->name != nullptr) {
+            std::string name(cur_node->name);
+            if (name.find("ffn_moe_topk") != std::string::npos ||
+                name.find("ffn_moe_argsort") != std::string::npos ||
+                name.find("ffn_moe_probs") != std::string::npos) {
+                m_model_outputs[name] = cur_node;
+                m_model_output_names.push_back(name);
+                continue; // Already added
+            }
+        }
+
         auto cur_node_use_count = m_cgraph->use_counts[ggml_hash_find(&m_cgraph->visited_hash_set, cur_node)];
         if (cur_node_use_count == 0) {
             // The output of SET_ROWS is the view_src tensor, which is updated in place. We should use the view_src name as the output name to make sure it can be correctly matched with the later ops that use the view_src.
@@ -829,13 +842,27 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor
     }
 
     // MUL_MAT_ID expert weights are 3D quantized GGML tensors [k, m, n_expert].
-    // A contiguous 3D quantized tensor is laid out in memory exactly like a 2D
-    // [n_expert*m, k] quantized tensor (expert-major rows, each row quantized
-    // along k). So we dequantize it with the regular 2D weight path — which keeps
-    // the weights compressed (a single u8/u4 Constant + broadcast scale/zp), unlike
-    // a per-expert Concat that would force OV to const-fold a huge f32 blob — and
-    // then reshape the f32 result to [n_expert, m, k]. translate_mul_mat_id reshapes
-    // this to [1, n_expert, m, k].
+    //
+    // We dequantize with the regular 2D weight path and produce a rank-2
+    // [n_expert, m*k] dequant subgraph. This is the exact shape that OpenVINO's CPU
+    // plugin pass `ConvertGatherToGatherCompressed` matches:
+    //   Constant(u4/u8, rank 2|3) -> Convert -> [Subtract(zp)] -> Multiply(scale)
+    //     -> Reshape(3D->2D) -> [Convert] -> Gather(axis 0)
+    // When the expert Gather (in translate_mul_mat_id) consumes this directly, the
+    // plugin fuses it into a single GatherCompressed op that keeps the weights
+    // COMPRESSED and decompresses only the selected experts at runtime. Any other
+    // shape (e.g. a rank-4 [1,n_expert,m,k] reshape of the dequant output) breaks the
+    // match, and the plugin falls back to const-folding the entire decompressed
+    // constant — ~87GB of f32 for 30 layers × 128 experts → OOM.
+    //
+    // Memory layout: a contiguous 3D quantized tensor [k, m, n_expert] is laid out
+    // expert-major (expert e occupies a contiguous m*k block, each k-row quantized in
+    // blocks along k). Since k is a whole number of quant super-blocks for every expert
+    // type here (Q4_K: k%256==0, Q5_1: k%32==0), regrouping the blocks as one m*k row
+    // per expert is bit-identical to the per-k-row quantization. So we view the data as
+    // a 2D [m*k, n_expert] tensor (ne[0]=m*k, ne[1]=n_expert); the 2D path then yields a
+    // [n_expert, m*k] dequant node. translate_mul_mat_id gathers experts on axis 0 and
+    // reshapes the gathered rows to [..., m, k].
     if (ggml_is_quantized(tensor->type) && tensor->ne[2] > 1) {
         GGML_ASSERT(tensor->ne[3] == 1 && "4D quantized expert weights are not supported");
         GGML_ASSERT(ggml_is_contiguous(tensor) && "expert weights must be contiguous to flatten");
@@ -843,26 +870,27 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor
         const int64_t m = tensor->ne[1];
         const int64_t k = tensor->ne[0];
 
-        // 2D view [k, n_expert*m] over the same data (ne[0]=k, ne[1]=n_expert*m).
+        // 2D view [m*k, n_expert] over the same data (ne[0]=m*k, ne[1]=n_expert):
+        // one quantized "row" of m*k weights per expert.
         ggml_tensor flat_tensor = *tensor;
-        flat_tensor.ne[1] = n_expert * m;
+        flat_tensor.ne[0] = m * k;
+        flat_tensor.ne[1] = n_expert;
         flat_tensor.ne[2] = 1;
         flat_tensor.ne[3] = 1;
+        flat_tensor.nb[1] = ggml_row_size(tensor->type, m * k);
         flat_tensor.nb[2] = ggml_nbytes(tensor);
         flat_tensor.nb[3] = ggml_nbytes(tensor);
 
         // Match the 2D weight path's use_bias=naive: test-backend-ops (naive) uses the
-        // accurate f16-bias dequant, production uses quantized zero points.
+        // accurate f16-bias dequant, production uses quantized zero points (the form
+        // ConvertGatherToGatherCompressed matches).
         OvWeight flat_weight = process_weight_tensor(&flat_tensor, tensor->data, nullptr, naive);
 
-        // Reshape dequantized [n_expert*m, k] -> [1, n_expert, m, k] to match the
-        // reversed-GGML 4D shape that the non-quantized expert path and
-        // translate_mul_mat_id expect.
-        auto target_shape = ov::op::v0::Constant::create(
-            ov::element::i64, {4}, std::vector<int64_t>{1, n_expert, m, k});
-        auto reshaped = std::make_shared<ov::op::v1::Reshape>(flat_weight.weight_node, target_shape, false);
-        reshaped->set_friendly_name(tensor->name);
-        return reshaped;
+        // Return the [n_expert, m*k] dequant node as-is. Do NOT reshape it here — the
+        // expert Gather must sit directly on this dequant output for the plugin to fold
+        // it into GatherCompressed. translate_mul_mat_id handles the m/k split.
+        flat_weight.weight_node->set_friendly_name(tensor->name);
+        return flat_weight.weight_node;
     }
 
     // There are three cases where we need to create a new weight node:
