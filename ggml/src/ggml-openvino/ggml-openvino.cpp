@@ -284,7 +284,8 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
             // through the f16 zero-point Subtract form in make_int*_weights, which is
             // exact (no round(min/scale) error that corrupts Q4_K/Q5_1 experts) AND
             // still folds to GatherCompressed (stays compressed, no OOM).
-            auto result = is_3d_expert ? process_weight_tensor(&proc_tensor, data, tensor->data, /*use_bias=*/true)
+            auto result = is_3d_expert ? process_weight_tensor(&proc_tensor, data, tensor->data, /*use_bias=*/true,
+                                                               /*zp_buffer_is_f16=*/true)
                                        : process_weight_tensor(&proc_tensor, data, tensor->data);
             // For 3D experts, leave result.weight_node as the rank-2 [n_expert, m*k]
             // dequant node — translate_mul_mat_id handles the expert gather and the
@@ -511,7 +512,11 @@ static size_t ggml_backend_openvino_buffer_type_get_alloc_size(ggml_backend_buff
     // For quantized 2D weights (and 3D MoE expert weights, handled as flattened 2D),
     // we need extra space for the extracted data written in-place into this buffer.
     if (ggml_is_quantized(tensor->type) && tensor->ne[3] == 1) {
-        ggml_openvino_extracted_layout layout = ggml_openvino_get_extracted_layout(tensor);
+        // 3D MoE experts are extracted with use_bias=true (f16 zero-point), which needs
+        // a larger zp slot — size the buffer with the same use_bias so the in-place
+        // extracted data fits (must match set_tensor's process_weight_tensor call).
+        const bool expert_use_bias = (tensor->ne[2] > 1);
+        ggml_openvino_extracted_layout layout = ggml_openvino_get_extracted_layout(tensor, expert_use_bias);
         if (layout.total_size > 0) {
             // GGML_LOG_DEBUG("%s: tensor %s needs %zu bytes (original %zu, extracted: weights=%zu scales=%zu zp=%zu)\n",
             //                __func__, tensor->name, layout.total_size, ggml_nbytes(tensor), layout.weights_size,

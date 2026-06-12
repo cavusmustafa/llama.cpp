@@ -372,6 +372,10 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
     // For symmetric quantization, no zp needed (weights stored as signed)
     if (layout.is_symmetric) {
         layout.zp_size = 0;
+    } else if (use_bias) {
+        // use_bias stores the zero-point/bias as F16 (2 bytes/block), not a packed
+        // integer. Must size the buffer accordingly so the extracted data fits in-place.
+        layout.zp_size = n_blocks * sizeof(uint16_t);
     } else {
         layout.zp_size = layout.is_u4 ? ((n_blocks + 1) / 2) : n_blocks;
     }
