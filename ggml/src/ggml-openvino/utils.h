@@ -1,3 +1,4 @@
+#include "ggml-backend-impl.h"
 #include "ggml-decoder.h"
 #include "ggml-impl.h"
 
@@ -44,7 +45,6 @@ struct graph_key_hash {
 
 struct decoder_runtime_ctx {
     decoder_runtime_ctx(std::shared_ptr<std::mutex> mutex) : mutex(std::move(mutex)) {}
-
     std::shared_ptr<std::mutex> mutex;
     std::shared_ptr<GgmlOvDecoder> ptr;
 };
@@ -64,7 +64,11 @@ struct ov_runtime_context {
     std::map<std::string, std::string> kv_state_input_name_map;
     std::atomic<int> backend_count;
 
-    ov_runtime_context() : device("CPU"), stateful(false), stateful_kv_size(0), backend_count(0) {}
+    ov_runtime_context() :
+        device("CPU"),
+        stateful(false),
+        stateful_kv_size(0),
+        backend_count(0) {}
 
     void clear_caches() {
         std::lock_guard<std::mutex> lock(ctx_mutex);
@@ -114,6 +118,8 @@ std::vector<T> pad_input(const ggml_tensor * tensor, size_t padded_rows, size_t 
                         static_cast<size_t>(tensor->ne[0]),  // cols
                         padded_rows, padded_cols, pad_value);
 }
+
+void set_zero_diagonal(std::vector<float> & matrix, size_t rows, size_t cols);
 
 const ggml_tensor * get_inp_pos_tensor(struct ggml_cgraph * cgraph);
 

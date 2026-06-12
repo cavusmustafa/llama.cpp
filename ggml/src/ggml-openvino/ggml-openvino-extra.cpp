@@ -3,12 +3,12 @@
 #include "ggml-impl.h"
 #include "ggml.h"
 
-#include <cstdlib>
 #include <cstring>
 #include <openvino/runtime/intel_gpu/ocl/ocl.hpp>
 #include <openvino/runtime/intel_npu/level_zero/level_zero.hpp>
 #include <openvino/runtime/properties.hpp>
 #include <optional>
+#include <string>
 
 ov::Core & ov_singleton_core() {
     static ov::Core core;
@@ -23,38 +23,7 @@ void ggml_openvino_device_config::init() {
     if (initialized) {
         return;
     }
-
-    // All recognized GGML_OPENVINO_* env vars. Their values are cached here
-    // once at backend init time and read back via ggml_openvino_getenv_str()
-    // (raw string) or ggml_openvino_getenv_int() (integer / boolean toggle).
-    static constexpr const char * env_var_names[] = {
-        // String values (use ggml_openvino_getenv_str)
-        "GGML_OPENVINO_DEVICE",
-        "GGML_OPENVINO_CACHE_DIR",
-        // Integer values (use ggml_openvino_getenv_int)
-        "GGML_OPENVINO_PREFILL_CHUNK_SIZE",
-        // Boolean toggles (treated as int flags via ggml_openvino_getenv_int)
-        "GGML_OPENVINO_STATEFUL_EXECUTION",
-        "GGML_OPENVINO_PROFILING",
-        "GGML_OPENVINO_DUMP_CGRAPH",
-        "GGML_OPENVINO_DUMP_IR",
-        "GGML_OPENVINO_DEBUG_INPUT",
-        "GGML_OPENVINO_DEBUG_OUTPUT",
-        "GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS",
-        "GGML_OPENVINO_ENABLE_CACHE",
-        "GGML_OPENVINO_DISABLE_CACHE",
-        "GGML_OPENVINO_DISABLE_KV_SLICE",
-        "GGML_OPENVINO_MANUAL_GQA_ATTN",
-    };
-
-    for (const char * const & env_var : env_var_names) {
-        auto * env = getenv(env_var);
-        if (env) {
-            environment_variables[env_var] = env;
-        }
-    }
-
-    device_name = ggml_openvino_getenv_str("GGML_OPENVINO_DEVICE", "CPU");
+    device_name = getenv("GGML_OPENVINO_DEVICE") ? getenv("GGML_OPENVINO_DEVICE") : "CPU";
     auto available_devices = ov_singleton_core().get_available_devices();
     if (std::find(available_devices.begin(), available_devices.end(), device_name) == available_devices.end()) {
         GGML_LOG_WARN("GGML OpenVINO Backend: device %s is not available, fallback to CPU\n", device_name.c_str());
@@ -62,7 +31,7 @@ void ggml_openvino_device_config::init() {
     }
     is_npu = (device_name == "NPU");
 
-    const char * cache_dir = ggml_openvino_getenv_str("GGML_OPENVINO_CACHE_DIR");
+    auto * cache_dir = getenv("GGML_OPENVINO_CACHE_DIR");
     if (device_name == "NPU") {
         compile_config = {
             {"NPU_COMPILER_DYNAMIC_QUANTIZATION", "YES"   },
@@ -82,6 +51,32 @@ void ggml_openvino_device_config::init() {
     } else if (cache_dir && strlen(cache_dir) > 0) {
         compile_config.insert(ov::cache_dir(cache_dir));
         compile_config.insert(ov::cache_mode(ov::CacheMode::OPTIMIZE_SIZE));
+    }
+
+    if (device_name == "CPU") {
+        // Opt-in CPU memory/precision knobs (default OFF to preserve accuracy and
+        // the original compile behavior — these did not reduce the MoE compile-time
+        // memory spike in practice; see the compile_model OOM investigation).
+        //
+        // GGML_OPENVINO_INFERENCE_PRECISION = f16|bf16|f32 (default: unset → plugin
+        // default). NOTE: f16 noticeably hurts accuracy on test-backend-ops, so it
+        // is NOT enabled by default.
+        if (const char * prec = getenv("GGML_OPENVINO_INFERENCE_PRECISION")) {
+            std::string prec_str = prec;
+            if (prec_str == "f32") {
+                compile_config.insert(ov::hint::inference_precision(ov::element::f32));
+            } else if (prec_str == "f16") {
+                compile_config.insert(ov::hint::inference_precision(ov::element::f16));
+                compile_config.insert(ov::hint::execution_mode(ov::hint::ExecutionMode::PERFORMANCE));
+            } else if (prec_str == "bf16") {
+                compile_config.insert(ov::hint::inference_precision(ov::element::bf16));
+                compile_config.insert(ov::hint::execution_mode(ov::hint::ExecutionMode::PERFORMANCE));
+            }
+        }
+        // On-the-fly grouped dynamic dequantization (opt-in).
+        if (const char * g = getenv("GGML_OPENVINO_DYN_QUANT_GROUP")) {
+            compile_config.insert(ov::hint::dynamic_quantization_group_size(atoi(g)));
+        }
     }
 
     // Initialize remote context with queue sharing for GPU
@@ -151,23 +146,6 @@ const std::string & ggml_openvino_get_device_name() {
     return ggml_openvino_get_device_config().device_name;
 }
 
-// Get the value of a GGML_OPENVINO_* env var as a string. Returns
-// default_value when the var is unset or set to an empty string.
-const char * ggml_openvino_getenv_str(const char * var, const char * default_value) {
-    auto & env_map = ggml_openvino_get_device_config().environment_variables;
-    auto it = env_map.find(var);
-    return (it == env_map.end() || it->second.empty()) ? default_value : it->second.c_str();
-}
-
-// Get the value of a GGML_OPENVINO_* env var as an int (via std::atoi).
-// Returns default_value (0) when the var is unset or empty. Used for both
-// integer settings (e.g. GGML_OPENVINO_PREFILL_CHUNK_SIZE) and boolean
-// toggles: "0" disables, any non-zero integer enables.
-int ggml_openvino_getenv_int(const char * var, int default_value) {
-    const char * v = ggml_openvino_getenv_str(var, nullptr);
-    return v ? std::atoi(v) : default_value;
-}
-
 // Check if running on NPU
 bool ggml_openvino_is_npu() {
     return ggml_openvino_get_device_config().is_npu;
@@ -222,13 +200,30 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
         return std::nullopt;
     }
     if (strncmp(tensor->name, "token_embd.weight", 17) == 0) {
-        return ((ggml_openvino_is_npu() && tensor->type == GGML_TYPE_Q6_K) ? ExtraQuantType::F16 :
-                                                                             ExtraQuantType::Q8_0_C);
+        // On CPU/GPU, requantizing token_embd to channel-wise Q8_0_C (one scale per
+        // 2816-wide row) loses precision on the many small embedding values (they
+        // round to 0), measurably degrading output quality. Keep native extraction
+        // (per-32 block scales) on non-NPU. NPU still needs the requant for layout.
+        // Override with GGML_OPENVINO_EMBD_REQUANT=1.
+        if (!ggml_openvino_is_npu() && !getenv("GGML_OPENVINO_EMBD_REQUANT")) {
+            return std::nullopt;
+        }
+        return ((ggml_openvino_is_npu() && tensor->type == GGML_TYPE_Q6_K) ? ExtraQuantType::F16 : ExtraQuantType::Q8_0_C);
     }
     if (strncmp(tensor->name, "output.weight", 13) == 0) {
         return ExtraQuantType::Q8_0_C;
     }
     if (ggml_openvino_is_npu()) {
+        return ExtraQuantType::Q4_0_128;
+    }
+    // MoE expert weights (3D [k, m, n_expert]). Optionally requantize them to Q4_0
+    // block=128 (u4) to shrink the extracted footprint. DEFAULT OFF: requant to Q4_0
+    // measurably degrades 26B output quality (produces garbage tokens), so native
+    // extraction (direct bit-unpack of the original Q4_K/Q5_1, no accuracy loss) is
+    // the default. Set GGML_OPENVINO_REQUANT_EXPERTS=1 to opt into the smaller form.
+    if (getenv("GGML_OPENVINO_REQUANT_EXPERTS") &&
+        std::string(getenv("GGML_OPENVINO_REQUANT_EXPERTS")) != "0" &&
+        tensor->ne[2] > 1 && tensor->ne[3] == 1) {
         return ExtraQuantType::Q4_0_128;
     }
     switch (tensor->type) {
@@ -252,8 +247,10 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
         return layout;
     }
 
-    // Only handle 2D weight tensors
-    if (tensor->ne[2] != 1 || tensor->ne[3] != 1) {
+    // Handle 2D weight tensors, and 3D MoE expert weights [k, m, n_expert] which
+    // are treated as a flattened 2D [n_expert*m, k] tensor (each row is quantized
+    // independently along k, so the block layout is identical when flattened).
+    if (tensor->ne[3] != 1) {
         return layout;
     }
 
@@ -375,6 +372,10 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
     // For symmetric quantization, no zp needed (weights stored as signed)
     if (layout.is_symmetric) {
         layout.zp_size = 0;
+    } else if (use_bias) {
+        // use_bias stores the zero-point/bias as F16 (2 bytes/block), not a packed
+        // integer. Must size the buffer accordingly so the extracted data fits in-place.
+        layout.zp_size = n_blocks * sizeof(uint16_t);
     } else {
         layout.zp_size = layout.is_u4 ? ((n_blocks + 1) / 2) : n_blocks;
     }

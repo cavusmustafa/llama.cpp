@@ -4,18 +4,20 @@
 #include "ggml-backend.h"
 #include "ggml-impl.h"
 #include "ggml-openvino-extra.h"
-#include "ggml-openvino/openvino/op_table.h"
 #include "ggml-openvino/utils.h"
 #include "ggml-quants.h"
 #include "ggml.h"
 
 #include <atomic>
-#include <cstdint>
 #include <cstdlib>
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <mutex>
 #include <openvino/core/type/element_type.hpp>
+#include <openvino/op/constant.hpp>
+#include <openvino/op/reshape.hpp>
+#include <openvino/pass/constant_folding.hpp>
 #include <openvino/openvino.hpp>
 #include <openvino/runtime/allocator.hpp>
 #include <openvino/runtime/intel_gpu/ocl/ocl.hpp>
@@ -147,7 +149,8 @@ static void * ggml_backend_openvino_buffer_get_base(ggml_backend_buffer_t buffer
 }
 
 static bool is_stateful_enabled() {
-    return ggml_openvino_getenv_int("GGML_OPENVINO_STATEFUL_EXECUTION") != 0;
+    static const auto * stateful = getenv("GGML_OPENVINO_STATEFUL_EXECUTION");
+    return stateful && *stateful != '\0' && strcmp(stateful, "0") != 0;
 }
 
 static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
@@ -235,12 +238,58 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
     bool is_weight_buffer = (buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
     // Full tensor set: offset=0, full size, not a view
     bool is_full_tensor_set = (offset == 0 && size == ggml_nbytes(tensor) && tensor->view_src == nullptr);
-    // 2D tensor (typical weight shape)
+    // 2D weight, or 3D MoE expert weight [k, m, n_expert] handled as flattened 2D.
     bool is_2d = (tensor->ne[2] == 1 && tensor->ne[3] == 1);
+    bool is_3d_expert = (tensor->ne[2] > 1 && tensor->ne[3] == 1 && ggml_is_quantized(tensor->type));
 
-    if (is_weight_buffer && is_full_tensor_set && is_2d) {
+    if (is_weight_buffer && is_full_tensor_set && (is_2d || is_3d_expert)) {
         try {
-            auto result = process_weight_tensor(tensor, data, tensor->data);
+            // Flatten 3D expert weights [k, m, n_expert] -> 2D [k, n_expert*m] so the
+            // extracted data is written in-place into this backend buffer (avoiding a
+            // large extra allocation), then reshape the dequant node back to 4D.
+            ggml_tensor proc_tensor = *tensor;
+            const int64_t n_expert = tensor->ne[2];
+            const int64_t m = tensor->ne[1];
+            const int64_t k = tensor->ne[0];
+            if (is_3d_expert) {
+                GGML_ASSERT(ggml_is_contiguous(tensor) && "3D expert weights must be contiguous");
+                // View the contiguous 3D expert tensor [k, m, n_expert] as a 2D tensor
+                // [m*k, n_expert] (ne[0]=m*k, ne[1]=n_expert): one quantized "row" of
+                // m*k weights per expert. This is bit-identical to the per-k-row
+                // quantization because k is a whole number of quant super-blocks for
+                // every expert type here (Q4_K: k%256==0, Q5_1: k%32==0), so regrouping
+                // the blocks does not change any block's contents.
+                //
+                // The 2D weight path then yields a rank-2 [n_expert, m*k] dequant
+                // subgraph: Constant(u4/u8) -> Convert -> [Subtract(zp)] -> Multiply
+                //   -> Reshape(3D->2D) -> Convert(f32).
+                // translate_mul_mat_id gathers experts on axis 0 of this node DIRECTLY,
+                // which lets the CPU plugin's ConvertGatherToGatherCompressed pass fuse
+                // the gather + dequant into a single GatherCompressed op. That keeps the
+                // weights COMPRESSED through compile_model and decompresses only the
+                // selected experts at runtime. Reshaping the dequant output to a 4D
+                // [1,n_expert,m,k] (the previous approach) breaks the fusion, so the
+                // plugin const-folds the entire decompressed constant (~87GB f32 for 30
+                // layers x 128 experts) and OOMs — disable_constant_folding does NOT
+                // help there (it just keeps both compressed and f32 copies).
+                proc_tensor.ne[0] = m * k;
+                proc_tensor.ne[1] = n_expert;
+                proc_tensor.ne[2] = 1;
+                proc_tensor.nb[1] = ggml_row_size(tensor->type, m * k);
+                proc_tensor.nb[2] = ggml_nbytes(tensor);
+                proc_tensor.nb[3] = ggml_nbytes(tensor);
+            }
+
+            // For 3D MoE experts use the accurate dequant (use_bias=true). This routes
+            // through the f16 zero-point Subtract form in make_int*_weights, which is
+            // exact (no round(min/scale) error that corrupts Q4_K/Q5_1 experts) AND
+            // still folds to GatherCompressed (stays compressed, no OOM).
+            auto result = is_3d_expert ? process_weight_tensor(&proc_tensor, data, tensor->data, /*use_bias=*/true,
+                                                               /*zp_buffer_is_f16=*/true)
+                                       : process_weight_tensor(&proc_tensor, data, tensor->data);
+            // For 3D experts, leave result.weight_node as the rank-2 [n_expert, m*k]
+            // dequant node — translate_mul_mat_id handles the expert gather and the
+            // m*k -> m,k split. Do NOT reshape to 4D or disable folding here.
             result.weight_node->set_friendly_name(tensor->name);
 
             // const auto & layout = result.layout;
@@ -367,9 +416,11 @@ static bool ggml_backend_openvino_buffer_cpy_tensor(ggml_backend_buffer_t buffer
             ggml_backend_openvino_buffer_context * src_ctx =
                 (ggml_backend_openvino_buffer_context *) src->buffer->context;
             if (src_ctx->is_remote) {
-                cl_int err = mem_cpy_fn(queue, CL_TRUE, dst->data, src->data, ggml_nbytes(src), 0, nullptr, nullptr);
+                cl_int err =
+                    mem_cpy_fn(queue, CL_TRUE, dst->data, src->data, ggml_nbytes(src), 0, nullptr, nullptr);
                 if (err != CL_SUCCESS) {
-                    GGML_LOG_ERROR("%s: clEnqueueMemcpyINTEL (device-to-device) failed with error %d\n", __func__, err);
+                    GGML_LOG_ERROR("%s: clEnqueueMemcpyINTEL (device-to-device) failed with error %d\n", __func__,
+                                   err);
                     return false;
                 }
                 return true;
@@ -458,9 +509,14 @@ static size_t ggml_backend_openvino_buffer_type_get_alloc_size(ggml_backend_buff
                                                                const ggml_tensor * tensor) {
     GGML_UNUSED(buft);
 
-    // For quantized 2D tensors (weights), we need extra space for extracted data
-    if (ggml_is_quantized(tensor->type) && tensor->ne[2] == 1 && tensor->ne[3] == 1) {
-        ggml_openvino_extracted_layout layout = ggml_openvino_get_extracted_layout(tensor);
+    // For quantized 2D weights (and 3D MoE expert weights, handled as flattened 2D),
+    // we need extra space for the extracted data written in-place into this buffer.
+    if (ggml_is_quantized(tensor->type) && tensor->ne[3] == 1) {
+        // 3D MoE experts are extracted with use_bias=true (f16 zero-point), which needs
+        // a larger zp slot — size the buffer with the same use_bias so the in-place
+        // extracted data fits (must match set_tensor's process_weight_tensor call).
+        const bool expert_use_bias = (tensor->ne[2] > 1);
+        ggml_openvino_extracted_layout layout = ggml_openvino_get_extracted_layout(tensor, expert_use_bias);
         if (layout.total_size > 0) {
             // GGML_LOG_DEBUG("%s: tensor %s needs %zu bytes (original %zu, extracted: weights=%zu scales=%zu zp=%zu)\n",
             //                __func__, tensor->name, layout.total_size, ggml_nbytes(tensor), layout.weights_size,
@@ -823,12 +879,9 @@ static bool is_gemma3n_flash_attn_pattern(const ggml_tensor * op) {
         return false;
     }
 
-    const ggml_tensor * q_base =
-        op->src[0] != nullptr && op->src[0]->src[0] != nullptr ? op->src[0]->src[0]->src[0] : nullptr;
-    const ggml_tensor * k_base =
-        op->src[1] != nullptr && op->src[1]->src[0] != nullptr ? op->src[1]->src[0]->src[0] : nullptr;
-    const ggml_tensor * v_base =
-        op->src[2] != nullptr && op->src[2]->src[0] != nullptr ? op->src[2]->src[0]->src[0] : nullptr;
+    const ggml_tensor * q_base = op->src[0] != nullptr && op->src[0]->src[0] != nullptr ? op->src[0]->src[0]->src[0] : nullptr;
+    const ggml_tensor * k_base = op->src[1] != nullptr && op->src[1]->src[0] != nullptr ? op->src[1]->src[0]->src[0] : nullptr;
+    const ggml_tensor * v_base = op->src[2] != nullptr && op->src[2]->src[0] != nullptr ? op->src[2]->src[0]->src[0] : nullptr;
 
     if (q_base == nullptr || q_base->op != GGML_OP_ROPE) {
         return false;
@@ -837,8 +890,8 @@ static bool is_gemma3n_flash_attn_pattern(const ggml_tensor * op) {
     // gemma3n direct attention path (no KV cache): q=ROPE, k=ROPE, v=RMS_NORM
     // Only match this specific pattern to avoid falsely catching other models
     // (e.g. Gemma4) that also use scale=1.0 with KV-cache backed attention.
-    const bool is_qkv_direct =
-        k_base != nullptr && v_base != nullptr && k_base->op == GGML_OP_ROPE && v_base->op == GGML_OP_RMS_NORM;
+    const bool is_qkv_direct = k_base != nullptr && v_base != nullptr &&
+                               k_base->op == GGML_OP_ROPE && v_base->op == GGML_OP_RMS_NORM;
 
     return is_qkv_direct;
 }
@@ -864,7 +917,12 @@ static bool mul_mat_id_requires_large_tmp(const ggml_tensor * op) {
 
     // The current OpenVINO translation materializes selected expert weights with
     // shape [n_tokens, n_used, rows, k]. Skip cases that would create a very
-    // large temporary on GPU and let the scheduler fall back instead.
+    // large temporary on GPU and let the scheduler fall back instead. The CPU
+    // device can handle the large intermediate, so only apply this cap on GPU.
+    if (ggml_openvino_get_device_name() != "GPU") {
+        return false;
+    }
+
     size_t tmp_elems = 1;
     if (!checked_mul_size(tmp_elems, static_cast<size_t>(ids->ne[1]), tmp_elems) ||
         !checked_mul_size(tmp_elems, static_cast<size_t>(ids->ne[0]), tmp_elems) ||
@@ -878,7 +936,7 @@ static bool mul_mat_id_requires_large_tmp(const ggml_tensor * op) {
         return true;
     }
 
-    static constexpr size_t mul_mat_id_tmp_limit = 1ULL << 30;  // 1 GiB
+    static constexpr size_t mul_mat_id_tmp_limit = 1ULL << 30; // 1 GiB
     return tmp_bytes > mul_mat_id_tmp_limit;
 }
 
@@ -897,8 +955,10 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
 
         // Keep the MoE routing weights gather on CPU for GPU runs. Splitting
         // only at the later SUM/CLAMP/DIV nodes still leaves this routing path
-        // numerically unstable for arctic-style MoE graphs.
-        if (strncmp(op->name, "ffn_moe_weights", sizeof("ffn_moe_weights") - 1) == 0) {
+        // numerically unstable for arctic-style MoE graphs. The CPU device path
+        // is numerically stable, so only force this off on GPU.
+        if (ggml_openvino_get_device_name() == "GPU" &&
+            strncmp(op->name, "ffn_moe_weights", sizeof("ffn_moe_weights") - 1) == 0) {
             return true;
         }
         break;
@@ -911,8 +971,7 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_ADD:
-    case GGML_OP_MUL:
-    case GGML_OP_SUB: {
+    case GGML_OP_MUL: {
         if (op->src[1]->op == GGML_OP_PERMUTE) {
             return true;
         }
@@ -920,14 +979,6 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
             if (op->src[0]->ne[i] != op->src[1]->ne[i] && (op->src[0]->ne[i] != 1 && op->src[1]->ne[i] != 1)) {
                 return true;
             }
-        }
-        break;
-    }
-    case GGML_OP_ADD_ID: {
-        // Keep support aligned with the CPU backend implementation, which only handles f32 inputs/output and i32 ids.
-        if (op->type != GGML_TYPE_F32 || op->src[0]->type != GGML_TYPE_F32 || op->src[1]->type != GGML_TYPE_F32 ||
-            op->src[2]->type != GGML_TYPE_I32) {
-            return true;
         }
         break;
     }
@@ -954,7 +1005,8 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
 
         // qwen3next MoE weight normalization is numerically sensitive on the GPU
         // path. Keep the normalization divide on CPU to match the reference.
-        if (strncmp(op->name, "ffn_moe_weights_norm", sizeof("ffn_moe_weights_norm") - 1) == 0) {
+        if (ggml_openvino_get_device_name() == "GPU" &&
+            strncmp(op->name, "ffn_moe_weights_norm", sizeof("ffn_moe_weights_norm") - 1) == 0) {
             return true;
         }
         break;
@@ -965,21 +1017,24 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
             return true;
         }
 
-        if (strncmp(op->name, "ffn_moe_probs", sizeof("ffn_moe_probs") - 1) == 0) {
+        if (ggml_openvino_get_device_name() == "GPU" &&
+            strncmp(op->name, "ffn_moe_probs", sizeof("ffn_moe_probs") - 1) == 0) {
             return true;
         }
 
         // GPU execution of the MoE routing weights softmax is numerically unstable
         // when fused with the surrounding GET_ROWS/reshape path. Keep this softmax
         // on CPU so the scheduler splits at the same boundary that restores parity.
-        if (op->src[0] != nullptr && op->src[0]->op == GGML_OP_RESHAPE && op->src[0]->src[0] != nullptr &&
+        if (op->src[0] != nullptr && op->src[0]->op == GGML_OP_RESHAPE &&
+            op->src[0]->src[0] != nullptr &&
             strncmp(op->src[0]->src[0]->name, "ffn_moe_weights", sizeof("ffn_moe_weights") - 1) == 0) {
             return true;
         }
         break;
     }
     case GGML_OP_SUM_ROWS: {
-        if (strncmp(op->name, "ffn_moe_weights_sum", sizeof("ffn_moe_weights_sum") - 1) == 0) {
+        if (ggml_openvino_get_device_name() == "GPU" &&
+            strncmp(op->name, "ffn_moe_weights_sum", sizeof("ffn_moe_weights_sum") - 1) == 0) {
             return true;
         }
 
@@ -987,10 +1042,11 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         if (op->src[0]->op == GGML_OP_PERMUTE) {
             return true;
         }
-        break;
+         break;
     }
     case GGML_OP_CLAMP: {
-        if (strncmp(op->name, "ffn_moe_weights_sum_clamped", sizeof("ffn_moe_weights_sum_clamped") - 1) == 0) {
+        if (ggml_openvino_get_device_name() == "GPU" &&
+            strncmp(op->name, "ffn_moe_weights_sum_clamped", sizeof("ffn_moe_weights_sum_clamped") - 1) == 0) {
             return true;
         }
         break;
@@ -1056,7 +1112,17 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
             op->src[0]->src[0]->src[0]->op == GGML_OP_PERMUTE) {
             return true;
         }
+        if (op->src[0]->type == GGML_TYPE_F16 && op->src[1]->type == GGML_TYPE_F16) {
+            // Has accuracy issue, try enabling this and see `test-backend-ops -o "MUL_MAT"`
+            // GGML_LOG_WARN("OpenVINO backend does not support MUL_MAT with two F16 tensors\n");
+            return true;
+        }
         if (op->src[0]->ne[3] != op->src[1]->ne[3] && op->src[0]->ne[3] != 1 && op->src[1]->ne[3] != 1) {
+            return true;
+        }
+        if (ggml_is_quantized(op->src[0]->type) && op->src[0]->ne[1] == 1) {
+            // MUL_MAT(type_a=q4_0,type_b=f32,m=1,n=2048,k=8192,bs=[1,1],nr=[1,1],per=[0,1,2,3],k_v=0,o=1)
+            // triggers a bug in ov matmul_shape_inference.hpp
             return true;
         }
         if (op->src[0]->op == GGML_OP_VIEW && op->src[1]->op == GGML_OP_VIEW) {
@@ -1065,8 +1131,12 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_MUL_MAT_ID: {
-        if (strncmp(op->name, "ffn_moe_gate_up", sizeof("ffn_moe_gate_up") - 1) == 0 ||
-            strncmp(op->name, "ffn_moe_down", sizeof("ffn_moe_down") - 1) == 0) {
+        // ffn_moe_gate_up / ffn_moe_down expert matmuls were previously forced to
+        // CPU. With 3D quantized expert-weight dequantization in create_weight_node,
+        // they can run on the OpenVINO CPU path. Keep them on CPU only for GPU.
+        if (ggml_openvino_get_device_name() == "GPU" &&
+            (strncmp(op->name, "ffn_moe_gate_up", sizeof("ffn_moe_gate_up") - 1) == 0 ||
+             strncmp(op->name, "ffn_moe_down", sizeof("ffn_moe_down") - 1) == 0)) {
             return true;
         }
 
@@ -1147,64 +1217,59 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         // Keep this op on CPU until the OpenVINO implementation is fixed.
         return true;
     }
-    case GGML_OP_VIEW: {
-        // Skip TOPK_MOE fused tests until it is fully supported
-        // the argsort_top_k VIEW wrapping ARGSORT is named "selected_experts" in test_topk_moe
-        if (strcmp(op->name, "selected_experts") == 0) {
-            return true;
-        }
-        break;
-    }
     default:
         break;
     }
     return false;
 }
 
-static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+static bool ggml_backend_openvino_device_supports_op_impl(ggml_backend_dev_t dev, const ggml_tensor * op) {
     GGML_ASSERT(dev->reg != nullptr);
 
-    static std::unordered_set<ggml_type> supported_types{
-        GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16, GGML_TYPE_I64,  GGML_TYPE_I32,  GGML_TYPE_Q4_0,
-        GGML_TYPE_Q4_1, GGML_TYPE_Q4_K, GGML_TYPE_Q5_1, GGML_TYPE_Q5_K, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K};
+    static std::set<ggml_type> supported_types{GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16, GGML_TYPE_I64,
+                                               GGML_TYPE_I32,  GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_K,
+                                               GGML_TYPE_Q5_1, GGML_TYPE_Q5_K, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K};
 
-    // derive supported op sets from the op_table map, keys in
-    // the map use the full macro name (e.g. "GGML_OP_ADD"), while
-    // the ggml_*_op_name() helpers return only the trailing part (e.g. "ADD").
-    // each set is built once and cached.
-    static const auto build_supported_sets = [] {
-        const auto & table = ov::frontend::ggml::get_supported_ops();
-        std::unordered_set<ggml_op> ops;
-        std::unordered_set<ggml_unary_op> unary_ops;
-        std::unordered_set<ggml_glu_op> glu_ops;
-
-        // GGML_OP_NONE has no translator but is always safe to add to the supported set.
-        ops.insert(GGML_OP_NONE);
-
-        for (int i = 0; i < GGML_OP_COUNT; ++i) {
-            const std::string key = std::string("GGML_OP_") + ggml_op_name(static_cast<ggml_op>(i));
-            if (table.count(key)) {
-                ops.insert(static_cast<ggml_op>(i));
-            }
-        }
-        for (int i = 0; i < GGML_UNARY_OP_COUNT; ++i) {
-            const std::string key = std::string("GGML_UNARY_OP_") + ggml_unary_op_name(static_cast<ggml_unary_op>(i));
-            if (table.count(key)) {
-                unary_ops.insert(static_cast<ggml_unary_op>(i));
-            }
-        }
-        for (int i = 0; i < GGML_GLU_OP_COUNT; ++i) {
-            const std::string key = std::string("GGML_GLU_OP_") + ggml_glu_op_name(static_cast<ggml_glu_op>(i));
-            if (table.count(key)) {
-                glu_ops.insert(static_cast<ggml_glu_op>(i));
-            }
-        }
-        return std::make_tuple(ops, unary_ops, glu_ops);
+    static const std::set<ggml_op> supported_ops{GGML_OP_NONE,
+                                                 GGML_OP_ADD,
+                                                 GGML_OP_CONCAT,
+                                                 GGML_OP_DIV,
+                                                 GGML_OP_MUL,
+                                                 GGML_OP_MUL_MAT,
+                                                 GGML_OP_MUL_MAT_ID,
+                                                 GGML_OP_VIEW,
+                                                 GGML_OP_CONT,
+                                                 GGML_OP_RESHAPE,
+                                                 GGML_OP_PERMUTE,
+                                                 GGML_OP_TRANSPOSE,
+                                                 GGML_OP_GET_ROWS,
+                                                 GGML_OP_ROPE,
+                                                 GGML_OP_RMS_NORM,
+                                                 GGML_OP_SCALE,
+                                                 GGML_OP_NORM,
+                                                 GGML_OP_SOFT_MAX,
+                                                 GGML_OP_SET_ROWS,
+                                                 GGML_OP_FLASH_ATTN_EXT,
+                                                 GGML_OP_CPY,
+                                                 GGML_OP_L2_NORM,
+                                                 GGML_OP_SUM_ROWS,
+                                                 GGML_OP_CLAMP,
+                                                 GGML_OP_PAD,
+                                                 GGML_OP_SSM_CONV,
+                                                 GGML_OP_GATED_DELTA_NET,
+                                                 GGML_OP_ARGSORT,
+                                                 GGML_OP_REPEAT,
+                                                 GGML_OP_IM2COL};
+    static const std::set<ggml_unary_op> supported_unary_ops{
+        GGML_UNARY_OP_GELU,
+        GGML_UNARY_OP_SILU,
+        GGML_UNARY_OP_SOFTPLUS,
+        GGML_UNARY_OP_TANH,
     };
-    static const auto supported_sets = build_supported_sets();
-    static const auto & supported_ops = std::get<0>(supported_sets);
-    static const auto & supported_unary_ops = std::get<1>(supported_sets);
-    static const auto & supported_glu_ops = std::get<2>(supported_sets);
+    static const std::set<ggml_glu_op> supported_glu_ops{
+        GGML_GLU_OP_SWIGLU,
+        GGML_GLU_OP_GEGLU,
+    };
 
     switch (op->op) {
     case GGML_OP_UNARY: {
@@ -1221,7 +1286,7 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
             // GGML_LOG_WARN("OpenVINO backend does not support GLU op %s\n", ggml_glu_op_name(ggml_get_glu_op(op)));
             return false;
         }
-        if (has_view_op_input(op)) {
+        if (ggml_openvino_get_device_name() == "GPU" && has_view_op_input(op)) {
             // GGML_LOG_WARN("OpenVINO backend does not support unary op %s with view input\n",
             //               ggml_glu_op_name(ggml_get_glu_op(op)));
             return false;
@@ -1265,8 +1330,12 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
             return false;
         }
         if (ggml_is_quantized(src->type) && src->ne[2] != 1) {
-            // GGML_LOG_WARN("OpenVINO backend does not support 3D quantized tensors\n");
-            return false;
+            // 3D quantized tensors are only supported as MUL_MAT_ID expert weights
+            // (src[0]), which are dequantized per-expert in create_weight_node.
+            if (!(op->op == GGML_OP_MUL_MAT_ID && i == 0)) {
+                // GGML_LOG_WARN("OpenVINO backend does not support 3D quantized tensors\n");
+                return false;
+            }
         }
     }
 
@@ -1274,6 +1343,19 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
         return false;
     }
     return true;
+}
+
+static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+    const bool supported = ggml_backend_openvino_device_supports_op_impl(dev, op);
+    if (!supported && getenv("GGML_OPENVINO_LOG_UNSUPPORTED")) {
+        const char * op_name = op->op == GGML_OP_UNARY ? ggml_unary_op_name(ggml_get_unary_op(op))
+                             : op->op == GGML_OP_GLU   ? ggml_glu_op_name(ggml_get_glu_op(op))
+                                                       : ggml_op_name(op->op);
+        GGML_LOG_WARN("OpenVINO backend UNSUPPORTED op: %-18s name=%-40s type=%s ne=[%ld,%ld,%ld,%ld]\n",
+                      op_name, op->name, ggml_type_name(op->type),
+                      (long) op->ne[0], (long) op->ne[1], (long) op->ne[2], (long) op->ne[3]);
+    }
+    return supported;
 }
 
 static bool ggml_backend_openvino_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {

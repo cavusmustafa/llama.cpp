@@ -6,7 +6,7 @@
 #include <openvino/op/constant.hpp>
 #include <openvino/runtime/tensor.hpp>
 
-void unpack_32_4(const uint8_t * data, uint8_t * dst);
+void unpack_32_4(const uint8_t* data, uint8_t* dst);
 
 void extract_q4_0_data(const ggml_tensor * tensor,
                        ov::Tensor & weights_arr,
@@ -30,7 +30,7 @@ void extract_q8_0_data(const ggml_tensor * tensor,
                        ov::Tensor & scales_arr,
                        ov::Tensor & zp_arr);
 
-void unpack_256_4(const uint8_t * data, uint8_t * dst);
+void unpack_256_4(const uint8_t* data, uint8_t* dst);
 
 void extract_q4_k_data(const ggml_tensor * tensor,
                        ov::Tensor & weights_arr,
@@ -126,7 +126,8 @@ OvWeight process_weight_tensor(
     const ggml_tensor * tensor,
     const void * data,                 // Source data pointer (may differ from tensor->data)
     void * output_base_ptr = nullptr,  // Base pointer for output buffers (or nullptr for internal allocation)
-    bool use_bias = false);            // Use fp bias instead of quantized zero_point, only used in test-backend-ops
+    bool use_bias = false,             // Use fp bias instead of quantized zero_point (test-backend-ops + 3D experts)
+    bool zp_buffer_is_f16 = false);    // output_base_ptr's zp slot is sized for f16 (3D-expert set_tensor path)
 
 void quantize_q4_0(const float * x,
                    ov::Tensor & weights_arr,
@@ -151,8 +152,8 @@ namespace ov {
 namespace op {
 namespace util {
 // From <openvino>/src/common/transformations/include/transformations/utils/utils.hpp
-bool get_single_value(const std::shared_ptr<ov::op::v0::Constant> & const_node,
-                      float & value,
+bool get_single_value(const std::shared_ptr<ov::op::v0::Constant>& const_node,
+                      float& value,
                       bool check_value_range = true);
 }  // namespace util
 }  // namespace op

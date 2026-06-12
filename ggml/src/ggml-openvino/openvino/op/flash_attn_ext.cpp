@@ -1,7 +1,6 @@
 #include "../node_context.h"
 #include "../op_table.h"
 #include "../utils.h"
-#include "ggml-openvino/ggml-openvino-extra.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -60,20 +59,20 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
     //    if (factor > 1 && num_heads_kv > 1) {
     auto q_shape = context.get_input_shape(0).to_shape();
     auto k_shape = context.get_input_shape(1).to_shape();
-    const int64_t num_heads = q_shape[1];
-    const int64_t num_heads_kv = k_shape[1];
-    const int64_t head_size = q_shape[3];
-    const int64_t factor = num_heads / num_heads_kv;
+    const int64_t num_heads     = q_shape[1];
+    const int64_t num_heads_kv  = k_shape[1];
+    const int64_t head_size     = q_shape[3];
+    const int64_t factor        = num_heads / num_heads_kv;
+
 
     // Manual GQA attention: enabled by default on GPU in stateless mode.
-    // Set GGML_OPENVINO_MANUAL_GQA_ATTN to a positive value (e.g. 1) to force-enable,
-    // or to 0 to force-disable. Unset falls back to the device-based default.
+    // Set GGML_OPENVINO_MANUAL_GQA_ATTN=0 to explicitly disable.
     static const bool manual_gqa_enabled = []() {
-        const char * env = ggml_openvino_getenv_str("GGML_OPENVINO_MANUAL_GQA_ATTN");
+        const char * env = getenv("GGML_OPENVINO_MANUAL_GQA_ATTN");
         if (env != nullptr) {
-            return ggml_openvino_getenv_int("GGML_OPENVINO_MANUAL_GQA_ATTN") > 0;
+            return std::string(env) != "0";
         }
-        const char * dev = ggml_openvino_getenv_str("GGML_OPENVINO_DEVICE");
+        const char * dev = getenv("GGML_OPENVINO_DEVICE");
         return dev != nullptr && std::string(dev) == "GPU";
     }();
     const bool use_manual_gqa_attention =
@@ -89,12 +88,15 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
         // an expanded K/V. The leading 0 + special_zero=true copies B at runtime,
         // so this is correct for B == 1, B > 1, and dynamic B alike. Only the head
         // dims and head_size are baked in as literals; the sequence dim stays -1.
-        auto k_5d_shape = ov::op::v0::Constant::create(ov::element::i64, {5},
-                                                       std::vector<int64_t>{0, num_heads_kv, 1, -1, head_size});
-        auto v_5d_shape = ov::op::v0::Constant::create(ov::element::i64, {5},
-                                                       std::vector<int64_t>{0, num_heads_kv, 1, -1, head_size});
-        auto q_5d_shape = ov::op::v0::Constant::create(ov::element::i64, {5},
-                                                       std::vector<int64_t>{0, num_heads_kv, factor, -1, head_size});
+        auto k_5d_shape = ov::op::v0::Constant::create(
+            ov::element::i64, {5},
+            std::vector<int64_t>{0, num_heads_kv, 1, -1, head_size});
+        auto v_5d_shape = ov::op::v0::Constant::create(
+            ov::element::i64, {5},
+            std::vector<int64_t>{0, num_heads_kv, 1, -1, head_size});
+        auto q_5d_shape = ov::op::v0::Constant::create(
+            ov::element::i64, {5},
+            std::vector<int64_t>{0, num_heads_kv, factor, -1, head_size});
 
         auto k_r = std::make_shared<ov::op::v1::Reshape>(k, k_5d_shape, true);
         auto v_r = std::make_shared<ov::op::v1::Reshape>(v, v_5d_shape, true);
@@ -108,8 +110,8 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
         // get [B, 1, 1, S_q, S_k], which NUMPY-broadcasts cleanly against the
         // [B, num_heads_kv, factor, S_q, S_k] scores: B==B, then 1→num_heads_kv and
         // 1→factor on the head dims.
-        auto mask_unsq1 =
-            std::make_shared<ov::op::v0::Unsqueeze>(mask, ov::op::v0::Constant::create(ov::element::i64, {1}, {2}));
+        auto mask_unsq1 = std::make_shared<ov::op::v0::Unsqueeze>(
+            mask, ov::op::v0::Constant::create(ov::element::i64, {1}, {2}));
         // mask_unsq1: [B, 1, 1, S_q, S_k] (rank 5)
         ov::Output<ov::Node> qk_masked = std::make_shared<ov::op::v1::Add>(qk_scaled, mask_unsq1);
 
@@ -120,8 +122,9 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
 
         // Reshape back to [B, num_heads, S_q, head_size] (combine num_heads_kv * factor).
         // Leading 0 + special_zero=true copies B at runtime.
-        auto out_4d_shape =
-            ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{0, num_heads, -1, head_size});
+        auto out_4d_shape = ov::op::v0::Constant::create(
+            ov::element::i64, {4},
+            std::vector<int64_t>{0, num_heads, -1, head_size});
         auto out_4d = std::make_shared<ov::op::v1::Reshape>(attn, out_4d_shape, true);
 
         // The standard SDPA path's downstream is Transpose(0,2,1,3) → Convert(f32).
@@ -142,8 +145,8 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
             auto unsqueeze_axes = ov::op::v0::Constant::create(ov::element::i64, Shape{}, {2});
             kv_unsqueezed = std::make_shared<ov::op::v0::Unsqueeze>(kv, unsqueeze_axes);
 
-            kv_broadcast_shape = ov::op::v0::Constant::create(ov::element::i64, {5},
-                                                              {(int64_t) 1, (int64_t) 1, f, (int64_t) 1, (int64_t) 1});
+            kv_broadcast_shape = ov::op::v0::Constant::create(
+                ov::element::i64, {5}, {(int64_t) 1, (int64_t) 1, f, (int64_t) 1, (int64_t) 1});
             new_kv_shape =
                 ov::op::v0::Constant::create(ov::element::i64, {4}, {(int64_t) 0, n_heads, (int64_t) -1, hs});
             //    ov::element::i64, {5}, {(int64_t) 1, (int64_t) 1, factor, (int64_t) 1, (int64_t) 1});

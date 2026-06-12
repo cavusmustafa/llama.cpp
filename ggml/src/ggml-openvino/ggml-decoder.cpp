@@ -5,7 +5,6 @@
 #include "ggml-openvino.h"
 #include "ggml-quants.h"
 #include "ggml.h"
-#include "utils.h"
 
 #include <algorithm>
 #include <cassert>
@@ -26,6 +25,7 @@
 #include <openvino/op/constant.hpp>
 #include <openvino/op/convert.hpp>
 #include <openvino/op/parameter.hpp>
+#include <openvino/op/reshape.hpp>
 #include <openvino/runtime/tensor.hpp>
 #include <ostream>
 #include <set>
@@ -52,12 +52,13 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
     m_model_weights(model_weights),
     m_model_params(model_params),
     m_compute_params(compute_params) {
-    static bool printed_address_map = false;
-    if (!printed_address_map) {
-        if (ggml_openvino_getenv_int("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS")) {
-            printed_address_map = true;
-            print_tensor_address_map(cgraph);
-        }
+    if (auto * env = getenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS"); env && std::string(env) != "0") {
+#ifdef _WIN32
+        _putenv_s("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS", "");
+#else
+        unsetenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS");
+#endif
+        print_tensor_address_map(cgraph);
     }
 
     validate_cgraph();
@@ -98,6 +99,16 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::sh
     }
 }
 
+// Distinct GGML VIEW tensors that share a name (e.g. the 8 per-expert
+// ggml_view_2d slices of ffn_moe_weighted, all auto-named "<src> (view)") collide in
+// the name-keyed tensor_map, so consumers all resolve to whichever was stored last.
+// Disambiguate VIEW outputs by appending the byte offset + the tensor pointer, and use
+// the SAME key when a consumer references a VIEW src, so producer/consumer stay matched.
+static std::string ggml_ov_unique_view_name(const ggml_tensor * t) {
+    return std::string(t->name) + "#voff" + std::to_string(t->view_offs) + "@" +
+           std::to_string(reinterpret_cast<uintptr_t>(t));
+}
+
 void GgmlOvDecoder::set_input_output() {
     for (int node_n = 0; node_n < m_cgraph->n_nodes; node_n++) {
         auto node = m_cgraph->nodes[node_n];
@@ -106,6 +117,11 @@ void GgmlOvDecoder::set_input_output() {
         auto node_name = std::string(node->name);
         auto node_output_name = node_name;
         auto * node_output = node;
+        // Give VIEW nodes a unique output name to avoid same-name collisions in the
+        // tensor_map (multiple distinct views of one tensor share the ggml name).
+        if (node->op == GGML_OP_VIEW) {
+            node_output_name = ggml_ov_unique_view_name(node);
+        }
         if (node->op == GGML_OP_SET_ROWS) {
             // SET_ROWS updates the tensor in place. For later ov op that uses the
             // the view_src of SET_ROWS, we need to make sure they get the updated tensor
@@ -130,6 +146,9 @@ void GgmlOvDecoder::set_input_output() {
             auto src_name = std::string(src->name);
             if (src->flags & GGML_TENSOR_FLAG_INPUT) {
                 src_name = get_graph_input_ov_name(src, node);
+            } else if (src->op == GGML_OP_VIEW) {
+                // Match the unique name assigned to VIEW outputs above.
+                src_name = ggml_ov_unique_view_name(src);
             }
             current_node_info.node_inputs[src_name] = src;
             current_node_info.node_inputs_names.push_back(src_name);
@@ -239,11 +258,11 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
     case GGML_OP_ROPE: {
         const int mode = node->op_params[2];
         switch (mode) {
-        case GGML_ROPE_TYPE_NEOX: {
+       case GGML_ROPE_TYPE_NEOX: {
             op_case = 1;
             break;
         }
-        case GGML_ROPE_TYPE_IMROPE: {
+       case GGML_ROPE_TYPE_IMROPE: {
             op_case = 2;
             break;
         }
@@ -271,8 +290,12 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
                 // Typical pattern:
                 //   src: ne=[N, M, K, 1], nb=[b0, b1, b2, b3]
                 //   dst: ne=[N, K, 1, 1], nb=[b0, b2, b3, b3]
-                if (node->ne[0] == src->ne[0] && node->ne[1] == src->ne[2] && node->ne[2] == 1 &&
-                    node->nb[0] == src->nb[0] && node->nb[1] == src->nb[2] && src->ne[1] > 1) {
+                if (node->ne[0] == src->ne[0] &&
+                    node->ne[1] == src->ne[2] &&
+                    node->ne[2] == 1 &&
+                    node->nb[0] == src->nb[0] &&
+                    node->nb[1] == src->nb[2] &&
+                    src->ne[1] > 1) {
                     op_case = 0;
                     break;
                 }
@@ -493,11 +516,9 @@ void GgmlOvDecoder::validate_cgraph() const {
     }
 }
 
-ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
-                                                      const ggml_tensor * input,
-                                                      int dynamic_dim_index) const {
+ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, const ggml_tensor * input, int dynamic_dim_index) const {
     if (m_naive) {
-        return input != nullptr ? ov::PartialShape{get_shape(input)} : ov::PartialShape{get_shape(op)};
+        return input!= nullptr ? ov::PartialShape{get_shape(input)} : ov::PartialShape{get_shape(op)};
     }
     auto name = std::string(input->name);
     ov::PartialShape input_shape;
@@ -549,8 +570,7 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
     if (dynamic_dim_index != -1 && m_model_is_splitted) {
         input_shape[3 - dynamic_dim_index] = -1;
     }
-    if (op->op == GGML_OP_SOFT_MAX && op->src[1] != nullptr && op->src[1]->op == GGML_OP_NONE &&
-        op->src[1]->flags & GGML_TENSOR_FLAG_INPUT && op->src[1] == input) {
+    if (op->op == GGML_OP_SOFT_MAX && op->src[1] != nullptr && op->src[1]->op == GGML_OP_NONE && op->src[1]->flags & GGML_TENSOR_FLAG_INPUT && op->src[1] == input) {
         // for softmax input mask, the shape is [1, 1, seq_active, seq_active], where seq_active is determined by the input active sequence length instead of the kv cache sequence length
         input_shape[2] = -1;
         input_shape[3] = -1;
@@ -620,8 +640,8 @@ void GgmlOvDecoder::compute_model_inputs() {
             std::string node_name(node->name);
             if (m_model_weights.find(node_name) == m_model_weights.end()) {
                 m_inputs[node_name] = node;
-                auto param_node = std::make_shared<ov::op::v0::Parameter>(
-                    get_ov_type(node), get_graph_input_shape(node, nullptr, m_node_dynamic_dims[node]));
+                auto param_node =
+                    std::make_shared<ov::op::v0::Parameter>(get_ov_type(node), get_graph_input_shape(node, nullptr, m_node_dynamic_dims[node]));
                 param_node->set_friendly_name(node_name);
                 param_node->output(0).get_tensor().set_names({node_name});
                 m_model_inputs[node_name] = param_node;
@@ -689,6 +709,7 @@ void GgmlOvDecoder::compute_model_outputs() {
         if (cur_node->op == GGML_OP_NONE || cur_node->op == GGML_OP_VIEW || cur_node->op == GGML_OP_RESHAPE) {
             continue;
         }
+
         auto cur_node_use_count = m_cgraph->use_counts[ggml_hash_find(&m_cgraph->visited_hash_set, cur_node)];
         if (cur_node_use_count == 0) {
             // The output of SET_ROWS is the view_src tensor, which is updated in place. We should use the view_src name as the output name to make sure it can be correctly matched with the later ops that use the view_src.
@@ -826,15 +847,70 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor
         return weight_node;
     }
 
+    // MUL_MAT_ID expert weights are 3D quantized GGML tensors [k, m, n_expert].
+    //
+    // We dequantize with the regular 2D weight path and produce a rank-2
+    // [n_expert, m*k] dequant subgraph. This is the exact shape that OpenVINO's CPU
+    // plugin pass `ConvertGatherToGatherCompressed` matches:
+    //   Constant(u4/u8, rank 2|3) -> Convert -> [Subtract(zp)] -> Multiply(scale)
+    //     -> Reshape(3D->2D) -> [Convert] -> Gather(axis 0)
+    // When the expert Gather (in translate_mul_mat_id) consumes this directly, the
+    // plugin fuses it into a single GatherCompressed op that keeps the weights
+    // COMPRESSED and decompresses only the selected experts at runtime. Any other
+    // shape (e.g. a rank-4 [1,n_expert,m,k] reshape of the dequant output) breaks the
+    // match, and the plugin falls back to const-folding the entire decompressed
+    // constant — ~87GB of f32 for 30 layers × 128 experts → OOM.
+    //
+    // Memory layout: a contiguous 3D quantized tensor [k, m, n_expert] is laid out
+    // expert-major (expert e occupies a contiguous m*k block, each k-row quantized in
+    // blocks along k). Since k is a whole number of quant super-blocks for every expert
+    // type here (Q4_K: k%256==0, Q5_1: k%32==0), regrouping the blocks as one m*k row
+    // per expert is bit-identical to the per-k-row quantization. So we view the data as
+    // a 2D [m*k, n_expert] tensor (ne[0]=m*k, ne[1]=n_expert); the 2D path then yields a
+    // [n_expert, m*k] dequant node. translate_mul_mat_id gathers experts on axis 0 and
+    // reshapes the gathered rows to [..., m, k].
+    if (ggml_is_quantized(tensor->type) && tensor->ne[2] > 1) {
+        GGML_ASSERT(tensor->ne[3] == 1 && "4D quantized expert weights are not supported");
+        GGML_ASSERT(ggml_is_contiguous(tensor) && "expert weights must be contiguous to flatten");
+        const int64_t n_expert = tensor->ne[2];
+        const int64_t m = tensor->ne[1];
+        const int64_t k = tensor->ne[0];
+
+        // 2D view [m*k, n_expert] over the same data (ne[0]=m*k, ne[1]=n_expert):
+        // one quantized "row" of m*k weights per expert.
+        ggml_tensor flat_tensor = *tensor;
+        flat_tensor.ne[0] = m * k;
+        flat_tensor.ne[1] = n_expert;
+        flat_tensor.ne[2] = 1;
+        flat_tensor.ne[3] = 1;
+        flat_tensor.nb[1] = ggml_row_size(tensor->type, m * k);
+        flat_tensor.nb[2] = ggml_nbytes(tensor);
+        flat_tensor.nb[3] = ggml_nbytes(tensor);
+
+        // Use the accurate dequant (use_bias=true) for 3D experts: make_int*_weights
+        // routes this through the exact f16 zero-point Subtract form (no round(min/scale)
+        // error that corrupts Q4_K/Q5_1 experts), which still folds to GatherCompressed.
+        // (This decoder path is used when the weight has no prebuilt extra, e.g. chunked
+        // compile / test-backend-ops; the set_tensor path in ggml-openvino.cpp mirrors it.)
+        OvWeight flat_weight = process_weight_tensor(&flat_tensor, tensor->data, nullptr, /*use_bias=*/true);
+
+        // Return the [n_expert, m*k] dequant node as-is. Do NOT reshape it here — the
+        // expert Gather must sit directly on this dequant output for the plugin to fold
+        // it into GatherCompressed. translate_mul_mat_id handles the m/k split.
+        flat_weight.weight_node->set_friendly_name(tensor->name);
+        return flat_weight.weight_node;
+    }
+
     // There are three cases where we need to create a new weight node:
     // 1. weights are in openvino_host_buffer. Weight loading to host buffer will not trigger backend_buffer_set_tensor
     // 2. weights are in cpu/cpu_mapped buffer. On token_embd.weight goes to case 1 or 2, depending on whether mmap or direct_io is used
     // 3. test-backend-ops. buffers in test-backend-ops does not set USAGE_WEIGHT so backend_buffer_set_tensor will not create weight node
 
     // GGML_LOG_DEBUG("%s: creating new weight node for %s\n", __func__, tensor->name);
-    static const std::set<ggml_type> weight_types = {GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16, GGML_TYPE_Q8_0,
-                                                     GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_1, GGML_TYPE_Q4_K,
-                                                     GGML_TYPE_Q5_K, GGML_TYPE_Q6_K};
+    static const std::set<ggml_type> weight_types = {GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16,
+                                                     GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1,
+                                                     GGML_TYPE_Q5_1, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K,
+                                                     GGML_TYPE_Q6_K};
     if (weight_types.find(tensor->type) == weight_types.end()) {
         throw std::runtime_error("Unexpected weight tensor type: " + std::string(tensor->name) + " with type " +
                                  ggml_type_name(tensor->type));
@@ -1073,9 +1149,7 @@ size_t GgmlOvDecoder::get_view_input_src_offset(int node_idx, const std::string 
     return 0;
 }
 
-std::vector<size_t> GgmlOvDecoder::get_view_input_stride(int node_idx,
-                                                         const std::string & name,
-                                                         size_t view_index) const {
+std::vector<size_t> GgmlOvDecoder::get_view_input_stride(int node_idx, const std::string & name, size_t view_index) const {
     auto it = m_node_info_list[node_idx].node_inputs_views.find(name);
     if (it != m_node_info_list[node_idx].node_inputs_views.end()) {
         if (view_index < it->second.size()) {
@@ -1085,9 +1159,7 @@ std::vector<size_t> GgmlOvDecoder::get_view_input_stride(int node_idx,
     return {};
 }
 
-std::vector<size_t> GgmlOvDecoder::get_view_input_src_stride(int node_idx,
-                                                             const std::string & name,
-                                                             size_t view_index) const {
+std::vector<size_t> GgmlOvDecoder::get_view_input_src_stride(int node_idx, const std::string & name, size_t view_index) const {
     auto it = m_node_info_list[node_idx].node_inputs_views.find(name);
     if (it != m_node_info_list[node_idx].node_inputs_views.end()) {
         if (view_index < it->second.size()) {
@@ -1110,9 +1182,7 @@ ov::Shape GgmlOvDecoder::get_view_input_ggml_shape(int node_idx, const std::stri
     return {};
 }
 
-ov::Shape GgmlOvDecoder::get_view_input_src_ggml_shape(int node_idx,
-                                                       const std::string & name,
-                                                       size_t view_index) const {
+ov::Shape GgmlOvDecoder::get_view_input_src_ggml_shape(int node_idx, const std::string & name, size_t view_index) const {
     auto it = m_node_info_list[node_idx].node_inputs_views.find(name);
     if (it != m_node_info_list[node_idx].node_inputs_views.end()) {
         if (view_index < it->second.size()) {
@@ -1125,9 +1195,7 @@ ov::Shape GgmlOvDecoder::get_view_input_src_ggml_shape(int node_idx,
     return {};
 }
 
-ov::PartialShape GgmlOvDecoder::get_view_input_ov_shape(int node_idx,
-                                                        const std::string & name,
-                                                        size_t view_index) const {
+ov::PartialShape GgmlOvDecoder::get_view_input_ov_shape(int node_idx, const std::string & name, size_t view_index) const {
     auto it = m_node_info_list[node_idx].node_inputs_views.find(name);
     if (it != m_node_info_list[node_idx].node_inputs_views.end()) {
         if (view_index < it->second.size()) {
@@ -1148,9 +1216,7 @@ ov::PartialShape GgmlOvDecoder::get_view_input_ov_shape(int node_idx,
     return {};
 }
 
-ov::PartialShape GgmlOvDecoder::get_view_input_src_ov_shape(int node_idx,
-                                                            const std::string & name,
-                                                            size_t view_index) const {
+ov::PartialShape GgmlOvDecoder::get_view_input_src_ov_shape(int node_idx, const std::string & name, size_t view_index) const {
     auto it = m_node_info_list[node_idx].node_inputs_views.find(name);
     if (it != m_node_info_list[node_idx].node_inputs_views.end()) {
         if (view_index < it->second.size()) {
@@ -1275,7 +1341,6 @@ std::string GgmlOvDecoder::compute_op_type(const ggml_tensor * node) {
         {GGML_OP_ACC,             "GGML_OP_ACC"            },
         {GGML_OP_ADD,             "GGML_OP_ADD"            },
         {GGML_OP_ADD1,            "GGML_OP_ADD1"           },
-        {GGML_OP_ADD_ID,          "GGML_OP_ADD_ID"         },
         {GGML_OP_CONCAT,          "GGML_OP_CONCAT"         },
         {GGML_OP_CONT,            "GGML_OP_CONT"           },
         {GGML_OP_DIV,             "GGML_OP_DIV"            },
@@ -1370,12 +1435,13 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             if (src == nullptr) {
                 continue;
             }
-            struct ggml_tensor * root_src = nullptr;
+            struct ggml_tensor *root_src = nullptr;
             // if (src->org_src) {
             //     root_src = src->org_src;
             // }
             if (root_src) {
-                if (is_inp_tok(root_src, node) || is_inp_pos(root_src, node) || is_output_idx(root_src, node)) {
+                if (is_inp_tok(root_src, node) || is_inp_pos(root_src, node) ||
+                    is_output_idx(root_src, node)) {
                     m_node_dynamic_dims[root_src] = 0;
                     m_node_dynamic_dims[src] = m_node_dynamic_dims[root_src];
                     continue;
@@ -1387,7 +1453,7 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                     m_node_dynamic_dims[src] = 0;
                     continue;
                 }
-                if (node->op == GGML_OP_VIEW && src->op == GGML_OP_NONE && !is_stateful() && !m_model_is_splitted) {
+                if ( node->op == GGML_OP_VIEW && src->op == GGML_OP_NONE && !is_stateful() && !m_model_is_splitted) {
                     m_node_dynamic_dims[src] = 1;
                     continue;
                 }
@@ -1455,10 +1521,11 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                     m_node_dynamic_dims[node] = m_node_dynamic_dims[node->src[0]];
                     break;
                 }
-                auto dynamic_dim_idx = m_node_dynamic_dims[node->src[0]];
+                auto dynamic_dim_idx   = m_node_dynamic_dims[node->src[0]];
                 auto dynamic_dim_value = node->src[0]->ne[dynamic_dim_idx];
                 auto dynamic_dim_stride =
-                    node->src[0]->nb[dynamic_dim_idx] / ggml_type_size(node->src[0]->type) * ggml_type_size(node->type);
+                    node->src[0]->nb[dynamic_dim_idx] / ggml_type_size(node->src[0]->type) *
+                    ggml_type_size(node->type);
                 for (int i = 0; i < GGML_MAX_DIMS; i++) {
                     if (node->nb[i] == dynamic_dim_stride) {
                         m_node_dynamic_dims[node] = i;
@@ -1483,7 +1550,7 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             // and handles merged-lower-dim cases that ne-value matching misses.
             m_node_dynamic_dims[node] = -1;
             if (m_node_dynamic_dims[node->src[0]] != -1) {
-                auto dynamic_dim_idx = m_node_dynamic_dims[node->src[0]];
+                auto dynamic_dim_idx    = m_node_dynamic_dims[node->src[0]];
                 auto dynamic_dim_stride = node->src[0]->nb[dynamic_dim_idx];
                 for (int i = 0; i < GGML_MAX_DIMS; i++) {
                     if (node->nb[i] == dynamic_dim_stride && node->ne[i] == node->src[0]->ne[dynamic_dim_idx]) {
@@ -1510,7 +1577,7 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             //   q dim 2 -> output dim 1
             //   q dim 3 -> output dim 3
             //   q dim 0 -> output dim 0  (head_size axis, unlikely to be dynamic)
-            constexpr int q_to_out[GGML_MAX_DIMS] = {0, 2, 1, 3};
+            constexpr int q_to_out[GGML_MAX_DIMS] = { 0, 2, 1, 3 };
             m_node_dynamic_dims[node] = -1;
             if (m_node_dynamic_dims[node->src[0]] != -1) {
                 auto q_dynamic_dim = m_node_dynamic_dims[node->src[0]];
@@ -1527,12 +1594,14 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                 } else {
                     size_t src_logical_nb[GGML_MAX_DIMS];
                     src_logical_nb[0] = ggml_type_size(node->src[0]->type);
-                    src_logical_nb[1] = src_logical_nb[0] * (node->src[0]->ne[0] / ggml_blck_size(node->src[0]->type));
+                    src_logical_nb[1] = src_logical_nb[0] *
+                                        (node->src[0]->ne[0] / ggml_blck_size(node->src[0]->type));
                     for (int i = 2; i < GGML_MAX_DIMS; i++) {
                         src_logical_nb[i] = src_logical_nb[i - 1] * node->src[0]->ne[i - 1];
                     }
 
-                    auto dynamic_dim_stride = src_logical_nb[dynamic_dim_idx] / ggml_type_size(node->src[0]->type) *
+                    auto dynamic_dim_stride = src_logical_nb[dynamic_dim_idx] /
+                                              ggml_type_size(node->src[0]->type) *
                                               ggml_type_size(node->type);
                     int matched_dim_count = 0;
                     for (int i = 0; i < GGML_MAX_DIMS; i++) {
@@ -1572,7 +1641,7 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             m_node_dynamic_dims[node] = -1;
             if (m_node_dynamic_dims[node->src[1]] != -1) {
                 const bool is_2D = node->op_params[6] == 1;
-                const int src_dyn = m_node_dynamic_dims[node->src[1]];
+                const int  src_dyn = m_node_dynamic_dims[node->src[1]];
                 if (is_2D) {
                     if (src_dyn == 0) {
                         m_node_dynamic_dims[node] = 1;  // IW -> OW

@@ -1,9 +1,11 @@
 #include "../node_context.h"
 #include "../op_table.h"
 #include "../utils.h"
+
 #include "ggml.h"
 
 #include <memory>
+#include <openvino/op/util/precision_sensitive_attribute.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/convert.hpp>
 #include <openvino/op/divide.hpp>
@@ -11,7 +13,6 @@
 #include <openvino/op/shape_of.hpp>
 #include <openvino/op/sigmoid.hpp>
 #include <openvino/op/tile.hpp>
-#include <openvino/op/util/precision_sensitive_attribute.hpp>
 #include <vector>
 
 namespace ov {
@@ -115,7 +116,8 @@ OutputVector translate_div(const NodeContext & context) {
 
     const auto output_type = context.get_output_type();
     const bool use_f32_compute = input_0.get_element_type() != ov::element::f32 ||
-                                 input_1.get_element_type() != ov::element::f32 || output_type != ov::element::f32;
+                                 input_1.get_element_type() != ov::element::f32 ||
+                                 output_type != ov::element::f32;
 
     if (use_f32_compute) {
         input_0 = std::make_shared<ov::op::v0::Convert>(input_0, ov::element::f32);
