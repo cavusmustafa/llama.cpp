@@ -13,6 +13,73 @@ OutputVector translate_view(const NodeContext & context) {
     num_inputs_check(context, 1, 1);
 
     if (!context.is_static()) {
+        // On the stateless/non-static path VIEW is normally a no-op (consumers re-slice).
+        // EXCEPTION: the MoE expert aggregation slices each expert plane out of
+        // ffn_moe_weighted [n_embd, n_expert_used, n_tokens] with ggml_view_2d and then
+        // sums the planes with a chain of ADDs (llama-graph.cpp). Those ADDs read this
+        // VIEW node directly from the tensor map and do NOT re-slice, so a no-op here
+        // makes every plane the full tensor and the expert sum collapses. Materialize the
+        // single-expert slice here. Gated by name (ffn_moe_weighted...view) so it can't
+        // affect any other view.
+        const std::string & vname = context.get_name();
+        if (vname.find("ffn_moe_weighted") != std::string::npos) {
+            auto src_ps = context.get_input_shape(0);
+            auto dst_ps = context.get_output_shape();
+            if (src_ps.rank().is_static() && dst_ps.rank().is_static() && src_ps.rank() == dst_ps.rank() &&
+                src_ps.is_static() && dst_ps.is_static()) {
+                auto sst = context.get_input_stride(0);
+                auto dst = context.get_output_stride();
+                size_t voff = context.get_output_op_offset();
+                auto ss = src_ps.to_shape();
+                auto dd = dst_ps.to_shape();
+                const size_t nd = ss.size();
+                if (sst.size() == nd && dst.size() == nd) {
+                    // Map each dst axis of size>1 to a src axis with equal (size,stride);
+                    // the unmatched src axis of size>1 is the indexed expert axis.
+                    std::vector<bool> used(nd, false);
+                    bool ok = true;
+                    for (size_t d = 0; d < nd; ++d) {
+                        if (dd[d] == 1) {
+                            continue;
+                        }
+                        int found = -1;
+                        for (size_t s = 0; s < nd; ++s) {
+                            if (!used[s] && ss[s] == dd[d] && sst[s] == dst[d]) { found = (int) s; break; }
+                        }
+                        if (found < 0) { ok = false; break; }
+                        used[found] = true;
+                    }
+                    int dropped = -1;
+                    if (ok) {
+                        for (size_t s = 0; s < nd; ++s) {
+                            if (!used[s] && ss[s] > 1) {
+                                if (dropped >= 0) { ok = false; break; }
+                                dropped = (int) s;
+                            }
+                        }
+                    }
+                    if (ok && dropped >= 0) {
+                        const size_t dstr = sst[dropped];
+                        const int64_t dsz = (int64_t) ss[dropped];
+                        if (dstr > 0 && voff % dstr == 0) {
+                            const int64_t sel = (int64_t) (voff / dstr);
+                            if (sel >= 0 && sel < dsz) {
+                                ov::Output<ov::Node> sl = std::make_shared<ov::op::v8::Slice>(
+                                    context.get_input(0),
+                                    ov::op::v0::Constant::create(ov::element::i64, {1}, {sel}),
+                                    ov::op::v0::Constant::create(ov::element::i64, {1}, {sel + 1}),
+                                    ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
+                                    ov::op::v0::Constant::create(ov::element::i64, {1}, {dropped}));
+                                auto dc = ov::op::v0::Constant::create(
+                                    ov::element::i64, {nd}, std::vector<int64_t>(dd.begin(), dd.end()));
+                                auto rs = std::make_shared<ov::op::v1::Reshape>(sl, dc, false);
+                                return rename_outputs_with_suffix({rs}, context.get_name());
+                            }
+                        }
+                    }
+                }
+            }
+        }
         return {context.get_input(0)};
     }
 
