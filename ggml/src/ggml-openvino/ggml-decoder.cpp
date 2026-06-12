@@ -692,12 +692,30 @@ void GgmlOvDecoder::compute_model_outputs() {
             continue;
         }
 
-        // For debugging: force-output MoE routing tensors when DUMP_CHKSUM is set
+        // For debugging: force-output MoE routing tensors when DUMP_CHKSUM is set.
+        // When DUMP_CHKSUM_ALL is set, force-output a broad set of per-layer
+        // checkpoints so OV intermediates can be diffed against the CPU reference
+        // (llama-eval-callback) to localize the first diverging op.
         if (getenv("GGML_OPENVINO_DUMP_CHKSUM") && cur_node->name != nullptr) {
             std::string name(cur_node->name);
-            if (name.find("ffn_moe_topk") != std::string::npos ||
-                name.find("ffn_moe_argsort") != std::string::npos ||
-                name.find("ffn_moe_probs") != std::string::npos) {
+            static const bool dump_all = getenv("GGML_OPENVINO_DUMP_CHKSUM_ALL") != nullptr;
+            // GGML_OPENVINO_DUMP_ONLY=<substr>: force-output ONLY tensors whose name
+            // contains <substr>. Use this to dump a single interior tensor per run —
+            // forcing many interior tensors at once is unreliable because the ggml
+            // scheduler reuses/aliases buffers for in-place ops, so later writes clobber
+            // earlier ones (genuine chunk-boundary l_out tensors are always reliable).
+            const char * only = getenv("GGML_OPENVINO_DUMP_ONLY");
+            const bool is_routing = name.find("ffn_moe_topk") != std::string::npos ||
+                                    name.find("ffn_moe_argsort") != std::string::npos ||
+                                    name.find("ffn_moe_probs") != std::string::npos;
+            const bool is_checkpoint = dump_all &&
+                (name.rfind("attn_out", 0) == 0 || name.rfind("kqv_out", 0) == 0 ||
+                 name.rfind("ffn_moe_out", 0) == 0 || name.rfind("ffn_moe_combined", 0) == 0 ||
+                 name.rfind("ffn_mlp", 0) == 0 || name.rfind("ffn_moe-", 0) == 0 ||
+                 name.rfind("ffn_moe_geglu", 0) == 0 || name.rfind("ffn_moe_down", 0) == 0 ||
+                 name.rfind("ffn_moe_gate_up", 0) == 0);
+            const bool is_only = only != nullptr && name.find(only) != std::string::npos;
+            if (only != nullptr ? is_only : (is_routing || is_checkpoint)) {
                 m_model_outputs[name] = cur_node;
                 m_model_output_names.push_back(name);
                 continue; // Already added
@@ -881,10 +899,12 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor
         flat_tensor.nb[2] = ggml_nbytes(tensor);
         flat_tensor.nb[3] = ggml_nbytes(tensor);
 
-        // Match the 2D weight path's use_bias=naive: test-backend-ops (naive) uses the
-        // accurate f16-bias dequant, production uses quantized zero points (the form
-        // ConvertGatherToGatherCompressed matches).
-        OvWeight flat_weight = process_weight_tensor(&flat_tensor, tensor->data, nullptr, naive);
+        // Use the accurate dequant (use_bias=true) for 3D experts: make_int*_weights
+        // routes this through the exact f16 zero-point Subtract form (no round(min/scale)
+        // error that corrupts Q4_K/Q5_1 experts), which still folds to GatherCompressed.
+        // (This decoder path is used when the weight has no prebuilt extra, e.g. chunked
+        // compile / test-backend-ops; the set_tensor path in ggml-openvino.cpp mirrors it.)
+        OvWeight flat_weight = process_weight_tensor(&flat_tensor, tensor->data, nullptr, /*use_bias=*/true);
 
         // Return the [n_expert, m*k] dequant node as-is. Do NOT reshape it here — the
         // expert Gather must sit directly on this dequant output for the plugin to fold

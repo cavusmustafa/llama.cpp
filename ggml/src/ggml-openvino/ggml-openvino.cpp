@@ -280,7 +280,12 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
                 proc_tensor.nb[3] = ggml_nbytes(tensor);
             }
 
-            auto result = process_weight_tensor(&proc_tensor, data, tensor->data);
+            // For 3D MoE experts use the accurate dequant (use_bias=true). This routes
+            // through the f16 zero-point Subtract form in make_int*_weights, which is
+            // exact (no round(min/scale) error that corrupts Q4_K/Q5_1 experts) AND
+            // still folds to GatherCompressed (stays compressed, no OOM).
+            auto result = is_3d_expert ? process_weight_tensor(&proc_tensor, data, tensor->data, /*use_bias=*/true)
+                                       : process_weight_tensor(&proc_tensor, data, tensor->data);
             // For 3D experts, leave result.weight_node as the rank-2 [n_expert, m*k]
             // dequant node — translate_mul_mat_id handles the expert gather and the
             // m*k -> m,k split. Do NOT reshape to 4D or disable folding here.

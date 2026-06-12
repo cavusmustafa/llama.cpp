@@ -507,11 +507,24 @@ ov::Output<ov::Node> make_int8_weights(ov::Tensor & weight,
         auto weights_f16 = std::make_shared<ov::op::v0::Convert>(weights_node, ov::element::f16);
 
         if (use_bias && zp.get_size() > 0) {
-            // Bias path: w * s + b (zp tensor holds f16 bias values)
-            auto bias_f16 = std::make_shared<ov::op::v0::Constant>(zp);
-            auto w_s =
-                std::make_shared<ov::op::v1::Multiply>(weights_f16, scales_f16, ov::op::AutoBroadcastType::NUMPY);
-            result = std::make_shared<ov::op::v1::Add>(w_s, bias_f16, ov::op::AutoBroadcastType::NUMPY);
+            // Accurate dequant in the FUSABLE zero-point form: (w - zp) * s with an
+            // exact f16 zp = -bias/scale. Equivalent to w*s + bias but matches
+            // ConvertGatherToGatherCompressed so MoE experts stay compressed (no OOM),
+            // and avoids the round(min/scale) error of an integer zp. See make_int4_weights.
+            const auto * bias_data = zp.data<ov::float16>();
+            const auto * scale_data = scales.data<ov::float16>();
+            size_t n = zp.get_size();
+            ov::Tensor zp_real(ov::element::f16, zp.get_shape());
+            auto * zp_real_data = zp_real.data<ov::float16>();
+            for (size_t i = 0; i < n; i++) {
+                float s = static_cast<float>(scale_data[i]);
+                float b = static_cast<float>(bias_data[i]);
+                zp_real_data[i] = ov::float16(s != 0.0f ? -b / s : 0.0f);
+            }
+            auto zero_point_f16 = std::make_shared<ov::op::v0::Constant>(zp_real);
+            auto w_zp =
+                std::make_shared<ov::op::v1::Subtract>(weights_f16, zero_point_f16, ov::op::AutoBroadcastType::NUMPY);
+            result = std::make_shared<ov::op::v1::Multiply>(w_zp, scales_f16, ov::op::AutoBroadcastType::NUMPY);
         } else {
             // Zero point path: (w - zp) * s
             auto zero_point = std::make_shared<ov::op::v0::Constant>(zp);
@@ -581,11 +594,28 @@ ov::Output<ov::Node> make_int4_weights(ov::Tensor & weight,
         auto weights_f16 = std::make_shared<ov::op::v0::Convert>(weights_node, ov::element::f16);
 
         if (use_bias && zp.get_size() > 0) {
-            // Bias path: w * s + b (zp tensor holds f16 bias values)
-            auto bias_f16 = std::make_shared<ov::op::v0::Constant>(zp);
-            auto w_s =
-                std::make_shared<ov::op::v1::Multiply>(weights_f16, scales_f16, ov::op::AutoBroadcastType::NUMPY);
-            result = std::make_shared<ov::op::v1::Add>(w_s, bias_f16, ov::op::AutoBroadcastType::NUMPY);
+            // Accurate dequant in the FUSABLE zero-point form: (w - zp) * s, where the
+            // zero point is an exact f16 value zp = -bias/scale (bias held in the zp
+            // tensor). This is algebraically equal to w*s + bias but, unlike an Add(bias)
+            // graph, it matches OpenVINO's ConvertGatherToGatherCompressed pattern
+            // (Constant->Convert->Subtract->Multiply), so MoE expert weights stay
+            // compressed through compile_model (no f32 materialization / OOM). Using a
+            // real f16 zp instead of an integer one avoids the round(min/scale) error
+            // that corrupts Q4_K/Q5_1 experts.
+            const auto * bias_data = zp.data<ov::float16>();
+            const auto * scale_data = scales.data<ov::float16>();
+            size_t n = zp.get_size();
+            ov::Tensor zp_real(ov::element::f16, zp.get_shape());
+            auto * zp_real_data = zp_real.data<ov::float16>();
+            for (size_t i = 0; i < n; i++) {
+                float s = static_cast<float>(scale_data[i]);
+                float b = static_cast<float>(bias_data[i]);
+                zp_real_data[i] = ov::float16(s != 0.0f ? -b / s : 0.0f);
+            }
+            auto zero_points_f16 = std::make_shared<ov::op::v0::Constant>(zp_real);
+            auto w_zp =
+                std::make_shared<ov::op::v1::Subtract>(weights_f16, zero_points_f16, ov::op::AutoBroadcastType::NUMPY);
+            result = std::make_shared<ov::op::v1::Multiply>(w_zp, scales_f16, ov::op::AutoBroadcastType::NUMPY);
         } else {
             // Zero point path: (w - zp) * s
             auto zero_points_node = std::make_shared<ov::op::v0::Constant>(zp);

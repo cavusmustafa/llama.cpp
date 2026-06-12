@@ -312,14 +312,14 @@ static enum ggml_status ov_graph_compute_dynamic_chunked(ggml_cgraph * cgraph,
                     continue;
                 }
 
-                // For F32 tensors, compute sum and print first few values
+                // For F32 tensors, compute sum (+ sum of abs, robust to cancellation)
                 if (t->type == GGML_TYPE_F32) {
                     const float * d = (const float *) t->data;
                     size_t n = ggml_nelements(t);
-                    double sum = 0;
-                    for (size_t j = 0; j < n; j++) sum += d[j];
-                    fprintf(stderr, "[CHK] %-28s n=%zu sum=%.5f [0]=%.5f [1]=%.5f [2]=%.5f [3]=%.5f\n",
-                            ov_output_names[i].c_str(), n, sum,
+                    double sum = 0, sumabs = 0;
+                    for (size_t j = 0; j < n; j++) { sum += d[j]; sumabs += std::fabs((double) d[j]); }
+                    fprintf(stderr, "[CHK] %-28s n=%zu sum=%.5f sumabs=%.5f [0]=%.5f [1]=%.5f [2]=%.5f [3]=%.5f\n",
+                            ov_output_names[i].c_str(), n, sum, sumabs,
                             n > 0 ? d[0] : 0, n > 1 ? d[1] : 0, n > 2 ? d[2] : 0, n > 3 ? d[3] : 0);
                 }
                 // For I32 tensors (e.g., argsort/topk indices), print first few values

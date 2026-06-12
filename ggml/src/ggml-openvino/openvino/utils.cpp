@@ -425,6 +425,80 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
             return reshape_pattern;
         };
 
+        // Single-axis index slice: the view selects one index of a source axis (the
+        // "dropped" axis collapses from size N to 1) via the offset, keeping all other
+        // axes. ggml pads shapes to 4 dims so the rank stays the same; detect the
+        // dropped axis by matching strides of the size>1 view axes to source axes — the
+        // unmatched size>1 source axis is the one being indexed. This is how the MoE
+        // expert aggregation slices each expert plane out of ffn_moe_weighted
+        // (ggml_view_2d, llama-graph.cpp): offset = expert_index * src_stride[expert_axis].
+        // Without this, a multi-axis stride mismatch falls through to `return current`
+        // (the whole unsliced tensor), making every expert slice identical and the
+        // expert sum wrong.
+        if (view_stride.size() == view_src_stride.size() && view_ggml_shape.size() == view_src_ggml_shape.size()) {
+            const size_t ndims = view_src_ggml_shape.size();
+            const size_t relative_offset = view_offset >= view_src_offset ? view_offset - view_src_offset : 0;
+
+            // Total elements must drop by exactly the indexed axis (one src axis goes to
+            // size 1 in the view); every other axis size must be preserved somewhere.
+            std::vector<bool> src_used(ndims, false);
+            bool mappable = true;
+            for (size_t v = 0; v < ndims; ++v) {
+                if (view_ggml_shape[v] == 1) {
+                    continue;  // size-1 view axis matches nothing in particular
+                }
+                int found = -1;
+                for (size_t s = 0; s < ndims; ++s) {
+                    if (!src_used[s] && view_src_ggml_shape[s] == view_ggml_shape[v] &&
+                        view_src_stride[s] == view_stride[v]) {
+                        found = static_cast<int>(s);
+                        break;
+                    }
+                }
+                if (found < 0) { mappable = false; break; }
+                src_used[found] = true;
+            }
+
+            // The dropped axis is the unique unused source axis with size > 1.
+            int dropped_axis = -1;
+            if (mappable) {
+                for (size_t s = 0; s < ndims; ++s) {
+                    if (!src_used[s] && view_src_ggml_shape[s] > 1) {
+                        if (dropped_axis >= 0) { mappable = false; break; }
+                        dropped_axis = static_cast<int>(s);
+                    }
+                }
+            }
+
+            if (mappable && dropped_axis >= 0) {
+                const size_t drop_stride = view_src_stride[dropped_axis];
+                const int64_t drop_size = static_cast<int64_t>(view_src_ggml_shape[dropped_axis]);
+                if (drop_stride > 0 && relative_offset % drop_stride == 0) {
+                    const int64_t sel = static_cast<int64_t>(relative_offset / drop_stride);
+                    if (sel >= 0 && sel < drop_size) {
+                        // Slice [sel, sel+1) on the dropped axis (keeps rank), then
+                        // reshape to the view's OV shape (which has that axis as size 1).
+                        auto sliced = std::make_shared<ov::op::v8::Slice>(
+                            current,
+                            ov::op::v0::Constant::create(ov::element::i64, {1}, {sel}),
+                            ov::op::v0::Constant::create(ov::element::i64, {1}, {sel + 1}),
+                            ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
+                            ov::op::v0::Constant::create(ov::element::i64, {1}, {dropped_axis}));
+                        if (view_ov_shape.is_static()) {
+                            auto reshaped = std::make_shared<ov::op::v1::Reshape>(
+                                sliced,
+                                ov::op::v0::Constant::create(ov::element::i64, {ndims}, view_ov_shape.to_shape()),
+                                false);
+                            reshaped->set_friendly_name(view_name);
+                            return reshaped;
+                        }
+                        sliced->set_friendly_name(view_name);
+                        return sliced;
+                    }
+                }
+            }
+        }
+
         bool same_stride = view_stride.size() == view_src_stride.size();
         if (same_stride) {
             for (size_t i = 0; i < view_stride.size(); ++i) {
