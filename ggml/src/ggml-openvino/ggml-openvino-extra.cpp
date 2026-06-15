@@ -45,6 +45,7 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_DISABLE_CACHE",
         "GGML_OPENVINO_DISABLE_KV_SLICE",
         "GGML_OPENVINO_MANUAL_GQA_ATTN",
+        "GGML_OPENVINO_GPU_FULL_MOE",
     };
 
     for (const char * const & env_var : env_var_names) {
@@ -171,6 +172,30 @@ int ggml_openvino_getenv_int(const char * var, int default_value) {
 // Check if running on NPU
 bool ggml_openvino_is_npu() {
     return ggml_openvino_get_device_config().is_npu;
+}
+
+// Latched true once a MUL_MAT_ID op is seen during op placement; see header. Plain
+// non-atomic bool: placement runs single-threaded before the multi-threaded compute
+// that reads it, and the flag only ever transitions false->true (idempotent).
+static bool g_has_moe_expert_weights = false;
+
+void ggml_openvino_note_moe_expert_weight() {
+    g_has_moe_expert_weights = true;
+}
+
+bool ggml_openvino_has_moe_expert_weights() {
+    return g_has_moe_expert_weights;
+}
+
+bool ggml_openvino_gpu_full_moe_enabled() {
+    // Explicit env override (allowlisted): non-zero forces ON, "0" forces OFF.
+    if (const char * v = ggml_openvino_getenv_str("GGML_OPENVINO_GPU_FULL_MOE")) {
+        return std::atoi(v) != 0;
+    }
+    // Auto: keep the whole MoE on one OV submodel when running a quant-MoE model on
+    // GPU. On CPU/NPU the per-node gates are no-ops anyway (they are GPU-guarded), so
+    // leaving this OFF there preserves the existing behavior exactly.
+    return ggml_openvino_get_device_name() == "GPU" && ggml_openvino_has_moe_expert_weights();
 }
 
 // Get the remote context for the current device (returns empty optional for CPU)

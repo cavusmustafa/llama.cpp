@@ -906,17 +906,17 @@ static bool checked_mul_size(size_t a, size_t b, size_t & out) {
     return true;
 }
 
-// When set (env GGML_OPENVINO_GPU_FULL_MOE), keep the entire MoE — including the routing
-// gather/softmax/argsort/normalization and the expert matmuls — on the OpenVINO device so
-// the whole model compiles as ONE submodel instead of fragmenting at every MoE node. The
-// per-node "force to CPU on GPU" gates below were added to work around GPU-plugin numerical
-// issues, but they fragment the graph into dozens of submodels with cross-boundary tensor
-// copies (which mis-handles e.g. the layer-5 argsort indices). With the dynamic-shape
-// frontend fix in place the un-fragmented graph is numerically correct, so this toggle lets
-// us run the whole MoE on one OV submodel.
+// Keep the entire MoE — including the routing gather/softmax/argsort/normalization and the
+// expert matmuls — on the OpenVINO device so the whole model compiles as ONE submodel instead
+// of fragmenting at every MoE node. The per-node "force to CPU on GPU" gates below were added
+// to work around GPU-plugin numerical issues, but they fragment the graph into dozens of
+// submodels with cross-boundary tensor copies (which mis-handles e.g. the layer-5 argsort
+// indices). With the dynamic-shape frontend fix in place the un-fragmented graph is
+// numerically correct, so this keeps the whole MoE on one OV submodel. Auto-enabled for
+// quant-MoE models on GPU; see ggml_openvino_gpu_full_moe_enabled() for the resolution order
+// and the GGML_OPENVINO_GPU_FULL_MOE override.
 static bool gpu_full_moe_enabled() {
-    static const bool v = getenv("GGML_OPENVINO_GPU_FULL_MOE") != nullptr;
-    return v;
+    return ggml_openvino_gpu_full_moe_enabled();
 }
 
 static bool mul_mat_id_requires_large_tmp(const ggml_tensor * op) {
@@ -1247,6 +1247,13 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
 
 static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     GGML_ASSERT(dev->reg != nullptr);
+
+    // A MUL_MAT_ID op is the expert-routed matmul: its presence means this is a MoE
+    // model. Latch it here (placement time) rather than at weight load, because the
+    // scheduler queries op placement before the expert weights are streamed in.
+    if (op->op == GGML_OP_MUL_MAT_ID) {
+        ggml_openvino_note_moe_expert_weight();
+    }
 
     static std::unordered_set<ggml_type> supported_types{
         GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16, GGML_TYPE_I64,  GGML_TYPE_I32,  GGML_TYPE_Q4_0,
