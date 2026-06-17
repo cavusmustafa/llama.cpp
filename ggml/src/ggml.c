@@ -7498,6 +7498,36 @@ static struct ggml_tensor * ggml_graph_get_parent(const struct ggml_cgraph * cgr
     return NULL;
 }
 
+static int ggml_op_params_used(const struct ggml_tensor * node) {
+    const int n = GGML_MAX_OP_PARAMS / (int) sizeof(int32_t);
+    int last = -1;
+    for (int i = 0; i < n; i++) {
+        if (node->op_params[i] != 0) {
+            last = i;
+        }
+    }
+    return last + 1;
+}
+
+static void ggml_graph_dump_dot_op_params(FILE * fp, const struct ggml_tensor * node) {
+    const int used = ggml_op_params_used(node);
+    if (used == 0) {
+        return;
+    }
+    fprintf(fp, " | params [");
+    for (int i = 0; i < used; i++) {
+        const int32_t iv = node->op_params[i];
+        float fv;
+        memcpy(&fv, &iv, sizeof(fv));
+        fprintf(fp, "%s%d", i == 0 ? "" : ", ", iv);
+        // also show a float interpretation when it looks like a real scalar (excludes small-int denormals)
+        if (fv != 0.0f && fabsf(fv) >= 1e-30f && fabsf(fv) < 1e9f) {
+            fprintf(fp, "(%g)", (double) fv);
+        }
+    }
+    fprintf(fp, "]");
+}
+
 static void ggml_graph_dump_dot_node_edge(FILE * fp, const struct ggml_cgraph * gb, struct ggml_tensor * node, struct ggml_tensor * parent, const char * label)  {
     struct ggml_tensor * gparent = ggml_graph_get_parent(gb, node);
     struct ggml_tensor * gparent0 = ggml_graph_get_parent(gb, parent);
@@ -7557,11 +7587,14 @@ void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph
             fprintf(fp, "(%s)|", ggml_type_name(node->type));
         }
 
-        if (ggml_is_matrix(node)) {
-            fprintf(fp, "%d [%" PRId64 ", %" PRId64 "] | <x>%s", i, node->ne[0], node->ne[1], ggml_op_symbol(node->op));
-        } else {
-            fprintf(fp, "%d [%" PRId64 ", %" PRId64 ", %" PRId64 "] | <x>%s", i, node->ne[0], node->ne[1], node->ne[2], ggml_op_symbol(node->op));
+        fprintf(fp, "%d [%" PRId64 ", %" PRId64 ", %" PRId64 ", %" PRId64 "] | <x>%s",
+                i, node->ne[0], node->ne[1], node->ne[2], node->ne[3], ggml_op_symbol(node->op));
+
+        if (node->op != GGML_OP_NONE) {
+            fprintf(fp, " %s", ggml_op_desc(node));
         }
+
+        ggml_graph_dump_dot_op_params(fp, node);
 
         if (grad) {
             fprintf(fp, " | <g>%s\"; ]\n", ggml_op_symbol(grad->op));
@@ -7641,6 +7674,169 @@ void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph
     fclose(fp);
 
     GGML_LOG_INFO("%s: dot -Tpng %s -o %s.png && open %s.png\n", __func__, filename, filename, filename);
+}
+
+static void ggml_json_print_escaped(FILE * fp, const char * s) {
+    fputc('"', fp);
+    for (const char * p = s; *p; p++) {
+        switch (*p) {
+            case '"':  fprintf(fp, "\\\""); break;
+            case '\\': fprintf(fp, "\\\\"); break;
+            case '\n': fprintf(fp, "\\n");  break;
+            case '\r': fprintf(fp, "\\r");  break;
+            case '\t': fprintf(fp, "\\t");  break;
+            default:
+                if ((unsigned char) *p < 0x20) {
+                    fprintf(fp, "\\u%04x", (unsigned char) *p);
+                } else {
+                    fputc(*p, fp);
+                }
+        }
+    }
+    fputc('"', fp);
+}
+
+static void ggml_json_print_ne(FILE * fp, const int64_t * ne) {
+    fprintf(fp, "[%" PRId64 ", %" PRId64 ", %" PRId64 ", %" PRId64 "]", ne[0], ne[1], ne[2], ne[3]);
+}
+
+void ggml_graph_dump_json(const struct ggml_cgraph * cgraph, const char * filename) {
+    FILE * fp = ggml_fopen(filename, "w");
+    GGML_ASSERT(fp);
+
+    // map tensor pointer -> stable id, so edges can reference nodes and leafs uniformly
+    fprintf(fp, "{\n");
+    fprintf(fp, "  \"n_nodes\": %d,\n", cgraph->n_nodes);
+    fprintf(fp, "  \"n_leafs\": %d,\n", cgraph->n_leafs);
+
+    fprintf(fp, "  \"nodes\": [\n");
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        const struct ggml_tensor * node = cgraph->nodes[i];
+
+        fprintf(fp, "    {\n");
+        fprintf(fp, "      \"id\": \"%p\",\n", (void *) (uintptr_t) node);
+        fprintf(fp, "      \"kind\": \"node\",\n");
+        fprintf(fp, "      \"idx\": %d,\n", i);
+        fprintf(fp, "      \"name\": ");  ggml_json_print_escaped(fp, node->name);  fprintf(fp, ",\n");
+        fprintf(fp, "      \"op\": ");    ggml_json_print_escaped(fp, ggml_op_name(node->op));  fprintf(fp, ",\n");
+        fprintf(fp, "      \"op_desc\": ");  ggml_json_print_escaped(fp, ggml_op_desc(node));  fprintf(fp, ",\n");
+        fprintf(fp, "      \"type\": ");  ggml_json_print_escaped(fp, ggml_type_name(node->type));  fprintf(fp, ",\n");
+        fprintf(fp, "      \"ne\": ");    ggml_json_print_ne(fp, node->ne);  fprintf(fp, ",\n");
+        fprintf(fp, "      \"nb\": [%zu, %zu, %zu, %zu],\n", node->nb[0], node->nb[1], node->nb[2], node->nb[3]);
+        fprintf(fp, "      \"n_elements\": %" PRId64 ",\n", ggml_nelements(node));
+        fprintf(fp, "      \"n_bytes\": %zu,\n", ggml_nbytes(node));
+        fprintf(fp, "      \"flags\": {\"input\": %s, \"output\": %s, \"param\": %s},\n",
+                (node->flags & GGML_TENSOR_FLAG_INPUT)  ? "true" : "false",
+                (node->flags & GGML_TENSOR_FLAG_OUTPUT) ? "true" : "false",
+                (node->flags & GGML_TENSOR_FLAG_PARAM)  ? "true" : "false");
+        if (node->view_src) {
+            fprintf(fp, "      \"view_src\": \"%p\",\n", (void *) (uintptr_t) node->view_src);
+            fprintf(fp, "      \"view_offs\": %zu,\n", node->view_offs);
+        } else {
+            fprintf(fp, "      \"view_src\": null,\n");
+        }
+
+        const int used = ggml_op_params_used(node);
+        fprintf(fp, "      \"op_params_i32\": [");
+        for (int j = 0; j < used; j++) {
+            fprintf(fp, "%s%d", j == 0 ? "" : ", ", node->op_params[j]);
+        }
+        fprintf(fp, "],\n");
+        fprintf(fp, "      \"op_params_f32\": [");
+        for (int j = 0; j < used; j++) {
+            float fv;
+            memcpy(&fv, &node->op_params[j], sizeof(fv));
+            fprintf(fp, "%s%g", j == 0 ? "" : ", ", (double) fv);
+        }
+        fprintf(fp, "],\n");
+
+        fprintf(fp, "      \"src\": [");
+        bool first = true;
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            const struct ggml_tensor * s = node->src[j];
+            if (!s) {
+                continue;
+            }
+            fprintf(fp, "%s\n        {\"slot\": %d, \"id\": \"%p\", \"name\": ", first ? "" : ",", j, (void *) (uintptr_t) s);
+            ggml_json_print_escaped(fp, s->name);
+            fprintf(fp, ", \"type\": ");
+            ggml_json_print_escaped(fp, ggml_type_name(s->type));
+            fprintf(fp, ", \"ne\": ");
+            ggml_json_print_ne(fp, s->ne);
+            fprintf(fp, "}");
+            first = false;
+        }
+        fprintf(fp, "%s]\n", first ? "" : "\n      ");
+        fprintf(fp, "    }%s\n", i + 1 < cgraph->n_nodes ? "," : "");
+    }
+    fprintf(fp, "  ],\n");
+
+    fprintf(fp, "  \"leafs\": [\n");
+    for (int i = 0; i < cgraph->n_leafs; i++) {
+        const struct ggml_tensor * node = cgraph->leafs[i];
+
+        fprintf(fp, "    {\n");
+        fprintf(fp, "      \"id\": \"%p\",\n", (void *) (uintptr_t) node);
+        fprintf(fp, "      \"kind\": \"leaf\",\n");
+        fprintf(fp, "      \"idx\": %d,\n", i);
+        fprintf(fp, "      \"name\": ");  ggml_json_print_escaped(fp, node->name);  fprintf(fp, ",\n");
+        fprintf(fp, "      \"op\": ");    ggml_json_print_escaped(fp, ggml_op_name(node->op));  fprintf(fp, ",\n");
+        fprintf(fp, "      \"type\": ");  ggml_json_print_escaped(fp, ggml_type_name(node->type));  fprintf(fp, ",\n");
+        fprintf(fp, "      \"ne\": ");    ggml_json_print_ne(fp, node->ne);  fprintf(fp, ",\n");
+        fprintf(fp, "      \"nb\": [%zu, %zu, %zu, %zu],\n", node->nb[0], node->nb[1], node->nb[2], node->nb[3]);
+        fprintf(fp, "      \"n_elements\": %" PRId64 ",\n", ggml_nelements(node));
+        fprintf(fp, "      \"flags\": {\"input\": %s, \"output\": %s, \"param\": %s}\n",
+                (node->flags & GGML_TENSOR_FLAG_INPUT)  ? "true" : "false",
+                (node->flags & GGML_TENSOR_FLAG_OUTPUT) ? "true" : "false",
+                (node->flags & GGML_TENSOR_FLAG_PARAM)  ? "true" : "false");
+        fprintf(fp, "    }%s\n", i + 1 < cgraph->n_leafs ? "," : "");
+    }
+    fprintf(fp, "  ]\n");
+
+    fprintf(fp, "}\n");
+
+    fclose(fp);
+
+    GGML_LOG_INFO("%s: wrote graph json to %s (%d nodes, %d leafs)\n", __func__, filename, cgraph->n_nodes, cgraph->n_leafs);
+}
+
+void ggml_graph_dump_auto(const struct ggml_cgraph * cgraph) {
+    const char * base = getenv("GGML_DUMP_GRAPH");
+    if (!base || !base[0]) {
+        return;
+    }
+
+    // dump only the first N invocations to avoid flooding (default 1); GGML_DUMP_GRAPH_MAX=0 means unlimited
+    static int dump_count = 0;
+    int max_dumps = 1;
+    const char * max_env = getenv("GGML_DUMP_GRAPH_MAX");
+    if (max_env && max_env[0]) {
+        max_dumps = atoi(max_env);
+    }
+    if (max_dumps != 0 && dump_count >= max_dumps) {
+        return;
+    }
+
+    const char * fmt = getenv("GGML_DUMP_GRAPH_FORMAT");
+    if (!fmt || !fmt[0]) {
+        fmt = "both";
+    }
+
+    const bool want_dot  = strcmp(fmt, "dot")  == 0 || strcmp(fmt, "both") == 0;
+    const bool want_json = strcmp(fmt, "json") == 0 || strcmp(fmt, "both") == 0;
+
+    char filename[1024];
+
+    if (want_dot) {
+        snprintf(filename, sizeof(filename), "%s.%d.dot", base, dump_count);
+        ggml_graph_dump_dot(cgraph, NULL, filename);
+    }
+    if (want_json) {
+        snprintf(filename, sizeof(filename), "%s.%d.json", base, dump_count);
+        ggml_graph_dump_json(cgraph, filename);
+    }
+
+    dump_count++;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

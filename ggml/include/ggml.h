@@ -2754,6 +2754,12 @@ extern "C" {
     // dump the graph into a file using the dot format
     GGML_API void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph * cgraph, const char * filename);
 
+    // dump the graph into a file using a detailed json format (nodes with op configs, shapes and inputs)
+    GGML_API void ggml_graph_dump_json(const struct ggml_cgraph * cgraph, const char * filename);
+
+    // dump the graph if GGML_DUMP_GRAPH is set; honors GGML_DUMP_GRAPH_FORMAT (dot|json|both) and GGML_DUMP_GRAPH_MAX
+    GGML_API void ggml_graph_dump_auto(const struct ggml_cgraph * cgraph);
+
     // TODO these functions were sandwiched in the old optimization interface, is there a better place for them?
     typedef void (*ggml_log_callback)(enum ggml_log_level level, const char * text, void * user_data);
 

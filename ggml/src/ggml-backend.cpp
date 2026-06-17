@@ -1898,6 +1898,8 @@ enum ggml_status ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sch
         }
     }
 
+    ggml_graph_dump_auto(graph);
+
     return ggml_backend_sched_compute_splits(sched);
 }
 
