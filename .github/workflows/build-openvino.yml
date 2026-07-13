@@ -71,6 +71,7 @@ jobs:
         id: cmake_build
         run: |
           source ./openvino_toolkit/setupvars.sh
+          rm -rf build/ReleaseOV/tools/ui
           cmake -B build/ReleaseOV -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_OPENVINO=ON \
