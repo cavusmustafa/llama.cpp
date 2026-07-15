@@ -977,7 +977,11 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor
         flat_tensor.nb[1] = ggml_row_size(tensor->type, m * k);
         flat_tensor.nb[2] = ggml_nbytes(tensor);
         flat_tensor.nb[3] = ggml_nbytes(tensor);
-        OvWeight flat_weight = process_weight_tensor(&flat_tensor, tensor->data, nullptr, /*use_bias=*/true);
+        // GatherMatmul prototype: build the rank-3 [n_expert, m, k] grouped dequant so the
+        // expert Gather folds to GatherMatmulCompressed (see make_int4_weights, mul_mat_id).
+        const int64_t gm_n_rows = ggml_openvino_moe_gather_matmul_enabled() ? m : 0;
+        OvWeight flat_weight = process_weight_tensor(&flat_tensor, tensor->data, nullptr, /*use_bias=*/true,
+                                                     /*zp_buffer_is_f16=*/false, gm_n_rows);
         flat_weight.weight_node->set_friendly_name(tensor->name);
         return flat_weight.weight_node;
     }

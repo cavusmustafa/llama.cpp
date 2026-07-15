@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <functional>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -26,6 +27,7 @@
 #include <openvino/op/convert.hpp>
 #include <openvino/op/multiply.hpp>
 #include <openvino/op/reshape.hpp>
+#include <openvino/pass/constant_folding.hpp>
 #include <openvino/op/subtract.hpp>
 #include <openvino/op/util/attr_types.hpp>
 #include <openvino/runtime/tensor.hpp>
@@ -508,7 +510,8 @@ ov::Output<ov::Node> make_int8_weights(ov::Tensor & weight,
                                        ov::Tensor & scales,
                                        ov::Tensor & zp,
                                        size_t group_size,
-                                       bool use_bias) {
+                                       bool use_bias,
+                                       int64_t n_rows) {
     ov::Shape orig_shape = weight.get_shape();
     bool is_signed = (weight.get_element_type() == ov::element::i8);  // Symmetric: signed weights, no ZP
 
@@ -517,7 +520,23 @@ ov::Output<ov::Node> make_int8_weights(ov::Tensor & weight,
 
     ov::Shape packed_shape = {orig_shape[0], orig_shape[1] / group_size, group_size};
 
-    if (packed_shape[1] == 1) {
+    // Rank-4 grouped form for GatherMatmulCompressed (see make_int4_weights).
+    const bool grouped4d = n_rows > 0;
+    ov::Shape final3d_shape;
+    if (grouped4d) {
+        const int64_t n_expert = static_cast<int64_t>(orig_shape[0]);
+        const int64_t total = static_cast<int64_t>(orig_shape[1]);
+        const int64_t k = total / n_rows;
+        const int64_t k_blk = k / static_cast<int64_t>(group_size);
+        packed_shape = {static_cast<size_t>(n_expert), static_cast<size_t>(n_rows), static_cast<size_t>(k_blk),
+                        group_size};
+        scale_shape = {static_cast<size_t>(n_expert), static_cast<size_t>(n_rows), static_cast<size_t>(k_blk), 1};
+        scales.set_shape(scale_shape);
+        if (!is_signed && zp.get_size() > 0) {
+            zp.set_shape(scale_shape);
+        }
+        final3d_shape = {static_cast<size_t>(n_expert), static_cast<size_t>(n_rows), static_cast<size_t>(k)};
+    } else if (packed_shape[1] == 1) {
         // Requantized channel-wise case
         packed_shape.erase(packed_shape.begin() + 1);
     } else {
@@ -584,13 +603,34 @@ ov::Output<ov::Node> make_int8_weights(ov::Tensor & weight,
         }
     }
 
-    if (packed_shape.size() != 2) {
+    if (grouped4d) {
+        // Rank-4 -> rank-3 reshape for CompressedWeightsBlock (see make_int4_weights).
+        auto final_shape = std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{3}, final3d_shape);
+        result = std::make_shared<ov::op::v1::Reshape>(result, final_shape, false);
+    } else if (packed_shape.size() != 2) {
         // If not requantized channel-wise case, reshape back to original shape
         auto final_shape =
             std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{orig_shape.size()}, orig_shape);
         result = std::make_shared<ov::op::v1::Reshape>(result, final_shape, false);
     }
 
+    if (grouped4d) {
+        // Prevent ConstantFolding from collapsing the dequant chain before the plugin's
+        // GatherMatmulCompressed fold runs (see make_int4_weights for the full rationale).
+        std::function<void(const ov::Output<ov::Node> &, int)> mark = [&](const ov::Output<ov::Node> & out, int depth) {
+            auto n = out.get_node_shared_ptr();
+            if (!n || depth > 6 || ov::as_type_ptr<ov::op::v0::Constant>(n)) {
+                return;
+            }
+            ov::pass::disable_constant_folding(n);
+            for (const auto & in : n->inputs()) {
+                mark(in.get_source_output(), depth + 1);
+            }
+        };
+        mark(result, 0);
+        // Leave dequant at f16 for GatherMatmulCompressed folding (see make_int4_weights).
+        return result;
+    }
     return std::make_shared<ov::op::v0::Convert>(result, ov::element::f32);
 }
 
@@ -598,7 +638,8 @@ ov::Output<ov::Node> make_int4_weights(ov::Tensor & weight,
                                        ov::Tensor & scales,
                                        ov::Tensor & zp,
                                        size_t group_size,
-                                       bool use_bias) {
+                                       bool use_bias,
+                                       int64_t n_rows) {
     ov::Shape orig_weight_shape = weight.get_shape();
     bool is_signed = (weight.get_element_type() == ov::element::i4);  // Symmetric: signed weights, no ZP
 
@@ -608,7 +649,25 @@ ov::Output<ov::Node> make_int4_weights(ov::Tensor & weight,
     // Create INT4 weight tensor
     ov::Shape packed_shape = {orig_weight_shape[0], orig_weight_shape[1] / group_size, group_size};
 
-    if (packed_shape[1] == 1) {
+    // Rank-4 grouped form for GatherMatmulCompressed: [n_expert, n_rows, k/group, group].
+    // k is the contiguous inner dim of the flattened [n_expert, m*k] weight and k%group==0,
+    // so this is a pure regrouping (bit-identical). Ends with a rank-4 -> rank-3 reshape.
+    const bool grouped4d = n_rows > 0;
+    ov::Shape final3d_shape;
+    if (grouped4d) {
+        const int64_t n_expert = static_cast<int64_t>(orig_weight_shape[0]);
+        const int64_t total = static_cast<int64_t>(orig_weight_shape[1]);
+        const int64_t k = total / n_rows;
+        const int64_t k_blk = k / static_cast<int64_t>(group_size);
+        packed_shape = {static_cast<size_t>(n_expert), static_cast<size_t>(n_rows), static_cast<size_t>(k_blk),
+                        group_size};
+        scale_shape = {static_cast<size_t>(n_expert), static_cast<size_t>(n_rows), static_cast<size_t>(k_blk), 1};
+        scales.set_shape(scale_shape);
+        if (!is_signed && zp.get_size() > 0) {
+            zp.set_shape(scale_shape);
+        }
+        final3d_shape = {static_cast<size_t>(n_expert), static_cast<size_t>(n_rows), static_cast<size_t>(k)};
+    } else if (packed_shape[1] == 1) {
         // Requantized channel-wise case
         packed_shape.erase(packed_shape.begin() + 1);
     } else {
@@ -671,13 +730,45 @@ ov::Output<ov::Node> make_int4_weights(ov::Tensor & weight,
         }
     }
 
-    if (packed_shape.size() != 2) {
+    if (grouped4d) {
+        // Rank-4 -> rank-3 reshape [n_expert, n_rows, k/group, group] -> [n_expert, n_rows, k].
+        // Matches CompressedWeightsBlock's rank-4 -> rank-3 predicate so GatherMatmul folds.
+        auto final_shape =
+            std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{3}, final3d_shape);
+        result = std::make_shared<ov::op::v1::Reshape>(result, final_shape, false);
+    } else if (packed_shape.size() != 2) {
         // If not requantized channel-wise case, reshape back to original shape
         auto final_shape = std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{orig_weight_shape.size()},
                                                                   orig_weight_shape);
         result = std::make_shared<ov::op::v1::Reshape>(result, final_shape, false);
     }
 
+    if (grouped4d) {
+        // Prevent ConstantFolding from collapsing the Constant(u4/u8)->Convert->[Subtract]
+        // ->Multiply->Reshape dequant into a single materialized f16 constant before the
+        // plugin's ConvertGatherMatmulToGatherMatmulCompressed runs (that would break the
+        // CompressedWeightsBlock match and materialize all experts -> OOM). Mark the chain
+        // nodes (not the leaf quant Constant) so they survive folding and the fold fires.
+        std::function<void(const ov::Output<ov::Node> &, int)> mark = [&](const ov::Output<ov::Node> & out, int depth) {
+            auto n = out.get_node_shared_ptr();
+            if (!n || depth > 6 || ov::as_type_ptr<ov::op::v0::Constant>(n)) {
+                return;
+            }
+            ov::pass::disable_constant_folding(n);
+            for (const auto & in : n->inputs()) {
+                mark(in.get_source_output(), depth + 1);
+            }
+        };
+        mark(result, 0);
+    }
+
+    if (grouped4d) {
+        // Leave the dequant at f16 (no trailing f32 Convert): GatherMatmul consumes the
+        // CompressedWeightsBlock output directly so ConvertGatherMatmulToGatherMatmulCompressed
+        // can fold it. A trailing f32 Convert makes the GatherMatmul weight input plain f32
+        // (fully materialized) and the fold is skipped.
+        return result;
+    }
     return std::make_shared<ov::op::v0::Convert>(result, ov::element::f32);
 }
 
@@ -723,7 +814,8 @@ std::shared_ptr<ov::Node> extract_quantized_weights(const ggml_tensor * tensor,
                                                     ov::Tensor & weights,
                                                     ov::Tensor & scales,
                                                     ov::Tensor & zp,
-                                                    bool use_bias) {
+                                                    bool use_bias,
+                                                    int64_t n_rows) {
     // Create a temporary tensor for extraction functions that read from tensor->data
     ggml_tensor temp_tensor = *tensor;
     temp_tensor.data = const_cast<void *>(data);
@@ -790,9 +882,9 @@ std::shared_ptr<ov::Node> extract_quantized_weights(const ggml_tensor * tensor,
     // Create the OpenVINO weight subgraph
     ov::Output<ov::Node> weight_node;
     if (is_u4) {
-        weight_node = make_int4_weights(weights, scales, zp, weights_per_block, use_bias);
+        weight_node = make_int4_weights(weights, scales, zp, weights_per_block, use_bias, n_rows);
     } else {
-        weight_node = make_int8_weights(weights, scales, zp, weights_per_block, use_bias);
+        weight_node = make_int8_weights(weights, scales, zp, weights_per_block, use_bias, n_rows);
     }
 
     auto result = weight_node.get_node_shared_ptr();
@@ -847,7 +939,7 @@ std::shared_ptr<ov::Node> requantize_to_buffers(const ggml_tensor * tensor,
 }
 
 OvWeight process_weight_tensor(const ggml_tensor * tensor, const void * data, void * output_base_ptr, bool use_bias,
-                               bool zp_buffer_is_f16) {
+                               bool zp_buffer_is_f16, int64_t n_rows) {
     GGML_ASSERT(tensor != nullptr);
     GGML_ASSERT(data != nullptr);
 
@@ -999,7 +1091,7 @@ OvWeight process_weight_tensor(const ggml_tensor * tensor, const void * data, vo
                                                    result.weights, result.scales, result.zp);
     } else {
         result.weight_node =
-            extract_quantized_weights(tensor, data, result.weights, result.scales, result.zp, use_bias);
+            extract_quantized_weights(tensor, data, result.weights, result.scales, result.zp, use_bias, n_rows);
     }
 
     return result;

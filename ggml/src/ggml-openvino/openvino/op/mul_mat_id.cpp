@@ -18,8 +18,21 @@
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/shape_of.hpp>
 #include <openvino/op/slice.hpp>
+#include <openvino/op/transpose.hpp>
 #include <openvino/op/unsqueeze.hpp>
 #include <vector>
+
+#include "ggml-openvino/ggml-openvino-extra.h"
+
+// Prototype: emit the internal ov::op::internal::GatherMatmul op for the expert
+// matmul (gated by GGML_OPENVINO_MOE_GATHERMATMUL) so the GPU plugin can fold
+// gather + dequant-of-selected-experts + matmul into one GatherMatmulCompressed op.
+// The internal op header is not exported by the OpenVINO package, so this whole path
+// is compiled in only when the build defines GGML_OPENVINO_HAVE_GATHER_MATMUL
+// (set by CMake when GGML_OPENVINO_OV_SRC points at an OpenVINO source checkout).
+#ifdef GGML_OPENVINO_HAVE_GATHER_MATMUL
+#    include "ov_ops/gather_matmul.hpp"
+#endif
 
 namespace ov {
 namespace frontend {
@@ -168,6 +181,89 @@ OutputVector translate_mul_mat_id(const NodeContext & context) {
     if (ids.get_element_type() != ov::element::i32 && ids.get_element_type() != ov::element::i64) {
         ids = std::make_shared<ov::op::v0::Convert>(ids, ov::element::i32);
     }
+
+    // --- Prototype: internal GatherMatmul op (gated) ---------------------------------
+    // GatherMatmul semantics: A:[1, M, K]  B:[n_expert, N, K]  indices:[M, n_used]
+    //   -> out:[n_used, M, N]   (requires indices[0]==A[1]==M and A[0]==1 or n_used).
+    // ggml (reversed dims): activations [1, n_tokens, n_used_or_1, k], ids [1,1,n_tokens,n_used].
+    // The plugin's ConvertGatherMatmulToGatherMatmulCompressed folds the compressed
+    // expert-weight block into GatherMatmulCompressed (gather + dequant-selected + matmul).
+#ifdef GGML_OPENVINO_HAVE_GATHER_MATMUL
+    if (ggml_openvino_moe_gather_matmul_enabled()) {
+        // At this point: activations is 3D [n_tokens, n_used_or_1, k], ids is 2D [n_tokens, n_used].
+        const auto mm_out_shape = context.get_output_shape();
+        FRONT_END_OP_CONVERSION_CHECK(mm_out_shape.rank().is_static() && mm_out_shape.rank().get_length() == 4 &&
+                                          mm_out_shape[3].is_static(),
+                                      "GatherMatmul proto: expected static N (row) dim");
+        const int64_t n_value = mm_out_shape[3].get_length();  // N = m (per-expert output rows)
+
+        // A: activations arrive as [n_tokens, n_used_or_1, k].
+        //  - gate/up (shared activation, n_used_or_1==1): A = [1, n_tokens, k]  (A[0]==1, broadcast).
+        //  - down  (per-expert activation, n_used_or_1==n_used): A = [n_used, n_tokens, k]
+        //    via transpose {1,0,2}, so A[0]==n_used matches the gather index count.
+        const auto act_ps = activations.get_partial_shape();
+        const bool per_expert_act = act_ps.rank().is_static() && act_ps[1].is_static() && act_ps[1].get_length() > 1;
+        ov::Output<ov::Node> A;
+        if (per_expert_act) {
+            auto perm_a = ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2});
+            A = std::make_shared<ov::op::v1::Transpose>(activations, perm_a);  // [n_used, n_tokens, k]
+        } else {
+            auto act_shape_3d = std::make_shared<ov::op::v3::ShapeOf>(activations, ov::element::i64);
+            auto a_dims = std::make_shared<ov::op::v0::Concat>(
+                ov::OutputVector{ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
+                                 get_dimensions(act_shape_3d, {0}), get_dimensions(act_shape_3d, {2})},
+                0);
+            A = std::make_shared<ov::op::v1::Reshape>(activations, a_dims, false);  // [1, n_tokens, k]
+        }
+        // indices: already [n_tokens, n_used].
+        ov::Output<ov::Node> idx = ids;
+        if (idx.get_element_type() != ov::element::i32 && idx.get_element_type() != ov::element::i64) {
+            idx = std::make_shared<ov::op::v0::Convert>(idx, ov::element::i32);
+        }
+
+        // B: expert weight. With GGML_OPENVINO_MOE_GATHERMATMUL the weight node is already
+        // built as rank-3 [n_expert, N=m, K] (grouped f16 dequant = CompressedWeightsBlock
+        // that folds to GatherMatmulCompressed) — use it directly. Otherwise reshape
+        // rank-2 -> rank-3 (does NOT fold; kept only as a shape-correctness fallback).
+        ov::Output<ov::Node> w3d;
+        const auto w_ps = expert_weights.get_partial_shape();
+        if (w_ps.rank().is_static() && w_ps.rank().get_length() == 3) {
+            w3d = expert_weights;
+        } else {
+            auto w_sh = std::make_shared<ov::op::v3::ShapeOf>(expert_weights, ov::element::i64);
+            auto n_expert_dim = get_dimensions(w_sh, {0});
+            auto w3d_dims = std::make_shared<ov::op::v0::Concat>(
+                ov::OutputVector{n_expert_dim, ov::op::v0::Constant::create(ov::element::i64, {1}, {n_value}),
+                                 ov::op::v0::Constant::create(ov::element::i64, {1}, {-1})},
+                0);
+            w3d = std::make_shared<ov::op::v1::Reshape>(expert_weights, w3d_dims, false);
+        }
+
+        // GatherMatmul does not require A and B to share an element type (output type =
+        // A's type). The CPU plugin's GatherMatmulCompressed fold only supports F32
+        // activations (getSupportedCompressedActivationsTypes), so keep A at f32 even
+        // though B is the f16 compressed-weights block.
+        if (A.get_element_type() != ov::element::f32) {
+            A = std::make_shared<ov::op::v0::Convert>(A, ov::element::f32);
+        }
+
+        auto gm = std::make_shared<ov::op::internal::GatherMatmul>(A, w3d, idx);  // [n_used, n_tokens, N]
+
+        // [n_used, n_tokens, N] -> [1, n_tokens, n_used, N] to match ggml MUL_MAT_ID output.
+        auto perm = ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2});
+        ov::Output<ov::Node> out = std::make_shared<ov::op::v1::Transpose>(gm, perm);  // [n_tokens, n_used, N]
+        auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+        auto gm_shape = std::make_shared<ov::op::v3::ShapeOf>(out, ov::element::i64);
+        auto out_dims = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{one, gm_shape}, 0);
+        out = std::make_shared<ov::op::v1::Reshape>(out, out_dims, false);
+
+        if (out.get_element_type() != context.get_output_type()) {
+            out = std::make_shared<ov::op::v0::Convert>(out, context.get_output_type());
+        }
+        return rename_outputs_with_suffix({out}, context.get_name());
+    }
+#endif  // GGML_OPENVINO_HAVE_GATHER_MATMUL
+    // --- end prototype ---------------------------------------------------------------
 
     // m (output row dim) is static; k = (m*k) / m. Gather experts on axis 0 of the
     // rank-2 [n_expert, m*k] weight -> [n_tokens, n_used, m*k], then split to

@@ -282,8 +282,11 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
             // through the f16 zero-point Subtract form in make_int*_weights, which is
             // exact (no round(min/scale) error that corrupts Q4_K/Q5_1 experts) AND
             // still folds to GatherCompressed (stays compressed, no OOM).
+            // GatherMatmul prototype: build the rank-3 [n_expert, m, k] grouped dequant so
+            // the expert Gather folds to GatherMatmulCompressed (see make_int4_weights).
+            const int64_t gm_n_rows = (is_3d_expert && ggml_openvino_moe_gather_matmul_enabled()) ? m : 0;
             auto result = is_3d_expert ? process_weight_tensor(&proc_tensor, data, tensor->data, /*use_bias=*/true,
-                                                               /*zp_buffer_is_f16=*/true)
+                                                               /*zp_buffer_is_f16=*/true, gm_n_rows)
                                        : process_weight_tensor(&proc_tensor, data, tensor->data);
             // For 3D experts, leave result.weight_node as the rank-2 [n_expert, m*k]
             // dequant node - translate_mul_mat_id handles the expert gather and the

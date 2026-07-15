@@ -117,6 +117,11 @@ bool ggml_openvino_has_moe_expert_weights();
 // CPU and GPU and avoids the graph fragmentation that caused index corruption on GPU.
 bool ggml_openvino_full_moe_enabled();
 
+// Whether to emit the fused GatherMatmul (-> GatherMatmulCompressed) for the expert
+// matmul. GPU ONLY (needs GGML_OPENVINO_MOE_GATHERMATMUL); the CPU plugin cannot keep
+// the folded weights compressed and would OOM. See ggml_openvino_moe_gather_matmul_enabled().
+bool ggml_openvino_moe_gather_matmul_enabled();
+
 // Get requantization type for a tensor type (returns nullopt if no requant needed)
 std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor * tensor, bool no_requant = false);
 

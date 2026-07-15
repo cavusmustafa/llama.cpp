@@ -45,6 +45,7 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_DISABLE_CACHE",
         "GGML_OPENVINO_DISABLE_KV_SLICE",
         "GGML_OPENVINO_MANUAL_GQA_ATTN",
+        "GGML_OPENVINO_MOE_GATHERMATMUL",
     };
 
     for (const char * const & env_var : env_var_names) {
@@ -193,6 +194,23 @@ bool ggml_openvino_full_moe_enabled() {
     // Enabled on the dynamic-shape devices (CPU and GPU); NPU uses the static path and
     // keeps the fragmented behavior for now.
     return !ggml_openvino_is_npu() && ggml_openvino_has_moe_expert_weights();
+}
+
+bool ggml_openvino_moe_gather_matmul_enabled() {
+#ifdef GGML_OPENVINO_HAVE_GATHER_MATMUL
+    // Emit the fused ov::op::internal::GatherMatmul for the expert matmul so the plugin
+    // folds it to GatherMatmulCompressed (gather + dequant-of-selected + matmul in one op).
+    // GPU ONLY: the GPU plugin has a MoE-compressed pipeline that keeps the weights
+    // compressed; on the CPU plugin the fold does not fire and all experts materialize to
+    // f32 (OOM), so restrict this to the GPU device. Requires GGML_OPENVINO_MOE_GATHERMATMUL.
+    return ggml_openvino_get_device_name() == "GPU" &&
+           ggml_openvino_getenv_int("GGML_OPENVINO_MOE_GATHERMATMUL") != 0;
+#else
+    // The internal GatherMatmul header is not available in a standard OpenVINO package
+    // build; the fused path is compiled out and this stays off so the weight builder and
+    // mul_mat_id keep the default (rank-2 GatherCompressed) layout consistently.
+    return false;
+#endif
 }
 
 // Get the remote context for the current device (returns empty optional for CPU)

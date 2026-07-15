@@ -54,17 +54,24 @@ void extract_mxfp4_data(const ggml_tensor * tensor, ov::Tensor & weights_arr, ov
 
 static constexpr size_t GGML_QUANTIZATION_GROUP_SIZE = 32;
 
+// n_rows: when > 0, build the dequant in the rank-4 grouped form
+// [n_expert, n_rows, k/group, group] followed by a rank-4 -> rank-3 reshape to
+// [n_expert, n_rows, k]. This shape matches OpenVINO's CompressedWeightsBlock
+// (rank-4 -> rank-3 reshape) so a downstream GatherMatmul folds to
+// GatherMatmulCompressed. Default (0) keeps the original rank-2 [n_expert, m*k] layout.
 ov::Output<ov::Node> make_int8_weights(ov::Tensor & weight,
                                        ov::Tensor & scales,
                                        ov::Tensor & zp,
                                        size_t group_size = GGML_QUANTIZATION_GROUP_SIZE,
-                                       bool use_bias = false);
+                                       bool use_bias = false,
+                                       int64_t n_rows = 0);
 
 ov::Output<ov::Node> make_int4_weights(ov::Tensor & weight,
                                        ov::Tensor & scales,
                                        ov::Tensor & zp,
                                        size_t group_size = GGML_QUANTIZATION_GROUP_SIZE,
-                                       bool use_bias = false);
+                                       bool use_bias = false,
+                                       int64_t n_rows = 0);
 
 ov::Output<ov::Node> make_mxfp4_weights(ov::Tensor & weight, ov::Tensor & scales);
 
@@ -80,7 +87,8 @@ std::shared_ptr<ov::Node> extract_quantized_weights(
     ov::Tensor & weights,
     ov::Tensor & scales,
     ov::Tensor & zp,
-    bool use_bias = false);  // Use fp bias instead of quantized zero_point (for test-backend-ops)
+    bool use_bias = false,  // Use fp bias instead of quantized zero_point (for test-backend-ops)
+    int64_t n_rows = 0);    // >0: build rank-4 grouped dequant for GatherMatmulCompressed (see make_int4_weights)
 
 // Requantize weights from tensor to target format, writing to provided buffers
 // For F16 target, only weights buffer is used (scales/zp ignored)
@@ -134,7 +142,8 @@ OvWeight process_weight_tensor(
     const void * data,                 // Source data pointer (may differ from tensor->data)
     void * output_base_ptr = nullptr,  // Base pointer for output buffers (or nullptr for internal allocation)
     bool use_bias = false,             // Use fp bias instead of quantized zero_point (test-backend-ops + 3D experts)
-    bool zp_buffer_is_f16 = false);    // output_base_ptr's zp slot is sized for f16 (3D-expert set_tensor path)
+    bool zp_buffer_is_f16 = false,     // output_base_ptr's zp slot is sized for f16 (3D-expert set_tensor path)
+    int64_t n_rows = 0);               // >0: build rank-4 grouped dequant for GatherMatmulCompressed
 
 void quantize_q4_0(const float * x,
                    ov::Tensor & weights_arr,

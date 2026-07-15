@@ -323,7 +323,8 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
     size_t offset = 0;
     for (auto & node : resulting_model->get_ordered_ops()) {
         if (auto cnst = ov::as_type_ptr<ov::op::v0::Constant>(node);
-            cnst && cnst->get_byte_size() / cnst->get_element_type().size() >= 16) {
+            cnst && cnst->get_element_type().size() > 0 &&
+            cnst->get_byte_size() / cnst->get_element_type().size() >= 16) {
             auto & rt_info = cnst->get_rt_info();
             if (rt_info.find(ov::WeightlessCacheAttribute::get_type_info_static()) == rt_info.end()) {
                 rt_info[ov::WeightlessCacheAttribute::get_type_info_static()] =
