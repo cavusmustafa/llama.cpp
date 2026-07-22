@@ -1459,6 +1459,16 @@ ov::Any GgmlOvDecoder::get_attribute(const std::string & name) const {
         // frontend translator needs no ggml headers.
         return static_cast<int>(ggml_get_op_params_i32(info.node, 0) == GGML_SORT_ORDER_DESC ? 1 : 0);
     }
+    if (name == "tri_type") {
+        // GGML_OP_TRI stores the ggml_tri_type enum in op_params[0]:
+        //   0 = UPPER_DIAG (col >= row), 1 = UPPER (col > row),
+        //   2 = LOWER_DIAG (col <= row), 3 = LOWER (col < row).
+        return ggml_get_op_params_i32(info.node, 0);
+    }
+    if (name == "fill_value") {
+        // GGML_OP_FILL stores the scalar fill constant as a float in op_params[0].
+        return ggml_get_op_params_f32(info.node, 0);
+    }
     if (name == "bias") {
         return ggml_get_op_params_f32(info.node, 1);
     }

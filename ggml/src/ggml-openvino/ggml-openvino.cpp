@@ -923,12 +923,16 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
                                                  GGML_OP_CLAMP, GGML_OP_ARGSORT, GGML_OP_ADD_ID, GGML_OP_PAD,
                                                  GGML_OP_REPEAT, GGML_OP_MUL_MAT_ID, GGML_OP_SSM_CONV,
                                                  GGML_OP_IM2COL, GGML_OP_GATED_DELTA_NET, GGML_OP_DIV,
-                                                 GGML_OP_SUB};
+                                                 GGML_OP_SUB, GGML_OP_CUMSUM, GGML_OP_SQR, GGML_OP_SQRT,
+                                                 GGML_OP_DIAG, GGML_OP_TRI, GGML_OP_FILL};
     static const std::set<ggml_unary_op> supported_unary_ops{
         GGML_UNARY_OP_GELU,
         GGML_UNARY_OP_SILU,
         GGML_UNARY_OP_TANH,
         GGML_UNARY_OP_SOFTPLUS,
+        GGML_UNARY_OP_SIGMOID,
+        GGML_UNARY_OP_EXP,
+        GGML_UNARY_OP_NEG,
     };
     static const std::set<ggml_glu_op> supported_glu_ops{
         GGML_GLU_OP_SWIGLU,
