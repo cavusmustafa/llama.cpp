@@ -1469,6 +1469,19 @@ ov::Any GgmlOvDecoder::get_attribute(const std::string & name) const {
         // GGML_OP_FILL stores the scalar fill constant as a float in op_params[0].
         return ggml_get_op_params_f32(info.node, 0);
     }
+    if (name == "set_offset_elems") {
+        // GGML_OP_SET writes src[1] into a contiguous region of src[0]'s flattened buffer. Its
+        // op_params are { nb1, nb2, nb3, offset_bytes, inplace }; op_params[3] is the destination
+        // byte offset. Return it in elements (offset_bytes / bytes-per-element) so the frontend never
+        // touches raw ggml strides. The SET result shares src[0]'s type/layout, so nb[0] is the
+        // element size.
+        const ggml_tensor * node = info.node;
+        const size_t offset_bytes = static_cast<size_t>(ggml_get_op_params_i32(node, 3));
+        const size_t elem_size = node->nb[0];
+        OPENVINO_ASSERT(elem_size != 0 && offset_bytes % elem_size == 0,
+                        "GGML_OP_SET offset must be aligned to the destination element size");
+        return static_cast<int64_t>(offset_bytes / elem_size);
+    }
     if (name == "bias") {
         return ggml_get_op_params_f32(info.node, 1);
     }
