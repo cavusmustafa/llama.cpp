@@ -75,6 +75,16 @@ ov::Tensor create_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
         output_shape = infer_request->get_output_tensor(output_index).get_shape();
     } else {
         output_shape = ggml_decoder->get_shape(ggml_tensor);
+        // A no-op in-place cache write produces a statically 0-element OV Result, but get_shape()
+        // returns the view_src's full (non-empty) cache shape. qwen3-next's recurrent-state reorder
+        // (inp->s_copy: GET_ROWS active seqs -> CPY into cache_r view) has 0 active sequences during
+        // single-sequence generation, so its CPY output is [.,.,0,.]. Binding the full cache shape
+        // makes set_output_tensor reject the size-0-vs-N mismatch. Bind the 0-element port shape
+        // instead: the copy writes nothing, which is exactly ggml's no-op semantics.
+        const auto & port_ps = infer_request->get_compiled_model().output(output_index).get_partial_shape();
+        if (port_ps.is_static() && ov::shape_size(port_ps.to_shape()) == 0) {
+            output_shape = port_ps.to_shape();
+        }
     }
 
     ov::Tensor output_tensor(output_type, output_shape, ggml_tensor->data);

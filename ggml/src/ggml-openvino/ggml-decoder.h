@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ggml-backend-impl.h"  // ggml_backend_buffer::usage (recurrent-state cache detection)
+#include "ggml-backend.h"       // GGML_BACKEND_BUFFER_USAGE_ANY
 #include "ggml-quants.h"
 #include "ggml.h"
 #include "openvino/frontend/gguf/decoder.hpp"
@@ -22,6 +24,7 @@ struct ModelParams {
     int n_heads = -1;
     int n_heads_kv = -1;
     int head_size = -1;
+    int state_size = -1;  // recurrent-state row width for SSM/DeltaNet models (qwen3-next); -1 = not recurrent
     int32_t rope_params[15];
     // Set when the graph's ROPE ops carry divergent op_params (e.g. gemma4's SWA vs global layers
     // use different n_dims / freq_base). The frontend maps this to RopeConfig::per_op so each ROPE
@@ -52,6 +55,20 @@ struct ComputeParams {
     int token_len_per_seq = -1;
     int past_kv_len = -1;
     int output_len = 1;
+
+    // Recurrent-state (SSM/DeltaNet, qwen3-next) machinery. -1 means "not present in this graph".
+    //
+    // cache_rs_reset_idx/_len: an in-place SCALE-by-0 on a slot block [idx, idx+len) of the
+    // recurrent-state cache clears it when a sequence starts fresh (the graph omits the SCALE
+    // otherwise). We surface idx/len as graph inputs so one compiled model handles both cases.
+    int cache_rs_reset_idx = -1;
+    int cache_rs_reset_len = -1;
+
+    // s_copy_active_slot_idx/_len: the active sequences occupy a contiguous slot block
+    // [idx, idx+len) of the state cache; the graph reorders slots (inp->s_copy) so the active
+    // ones are contiguous. Read from the active conv/gdn state writeback destination view.
+    int s_copy_active_slot_idx = -1;
+    int s_copy_active_slot_len = -1;
 };
 
 class GgmlOvDecoder : public ov::frontend::gguf::GgufDecoder {
@@ -206,8 +223,12 @@ public:
         return op->op == GGML_OP_ROPE && tensor == op->src[2];
     }
 
+    // Also matches the recurrent-state caches (cache_r conv-state, cache_s GDN-state) in SSM/
+    // DeltaNet models: those live in a USAGE_ANY buffer and are written in place, not via SET_ROWS.
     inline static bool is_kvcache(const ggml_tensor * tensor, const ggml_tensor * op) {
-        return op->op == GGML_OP_SET_ROWS && op->src[2] == tensor;
+        return (tensor != nullptr && tensor->buffer != nullptr &&
+                tensor->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY) ||
+               (op != nullptr && op->op == GGML_OP_SET_ROWS && op->src[2] == tensor);
     }
 
     inline static bool is_kv_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
@@ -216,6 +237,14 @@ public:
 
     inline static bool is_output_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0]->op != GGML_OP_NONE;
+    }
+
+    // The state-permutation index list (inp->s_copy in llama-graph.cpp) used by SSM/DeltaNet models
+    // to reorder recurrent-state cache slots: it is the GET_ROWS index (src[1]) whose gathered data
+    // (src[0]) is a recurrent-state cache (USAGE_ANY buffer).
+    inline static bool is_inp_s_copy(const ggml_tensor * tensor, const ggml_tensor * op) {
+        return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0] != nullptr &&
+               op->src[0]->buffer != nullptr && op->src[0]->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY;
     }
 
     static std::string get_graph_input_ov_name(const ggml_tensor * tensor, const ggml_tensor * op) {

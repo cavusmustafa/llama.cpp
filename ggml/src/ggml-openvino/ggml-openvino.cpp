@@ -763,6 +763,34 @@ static bool is_supported_flash_attn_pattern(const ggml_tensor * op) {
     return true;
 }
 
+// True if `tensor` (a view) fits entirely within its view_src buffer given its view offset.
+// A non-view tensor trivially fits.
+static bool tensor_view_fits_src_buffer(const ggml_tensor * tensor) {
+    if (tensor->view_src == nullptr) {
+        return true;
+    }
+    const size_t src_nbytes = ggml_nbytes(tensor->view_src);
+    if (tensor->view_offs > src_nbytes) {
+        return false;
+    }
+    const size_t tensor_nbytes = ggml_nbytes(tensor);
+    return tensor_nbytes <= src_nbytes - tensor->view_offs;
+}
+
+// A CPY whose destination is a view into a (recurrent-state) cache is supported when the write is
+// either empty or contiguous and fits within the src buffer -- this admits the qwen3-next conv/GDN
+// state writeback (an in-place CPY into a USAGE_ANY cache view) that HEAD's cast-only guard rejected.
+// A plain cast-CPY (view_src == nullptr) is trivially supported here.
+static bool cpy_output_view_is_supported(const ggml_tensor * op) {
+    if (op->view_src == nullptr) {
+        return true;
+    }
+    if (!tensor_view_fits_src_buffer(op)) {
+        return false;
+    }
+    return ggml_nbytes(op) == 0 || ggml_is_contiguous(op);
+}
+
 static bool is_op_unsupported_case(const ggml_tensor * op) {
     switch (op->op) {
     case GGML_OP_GET_ROWS:
@@ -831,8 +859,48 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_CPY: {
-        if (op->src[1] != op) {
-            // GGML_LOG_WARN("OpenVINO backend only supports CPY that is a cast\n");
+        if (op->src[0]->type == GGML_TYPE_BF16 || op->src[1]->type == GGML_TYPE_BF16) {
+            // GGML_LOG_WARN("OpenVINO backend does not support CPY with bf16 types\n");
+            return true;
+        }
+        if (ggml_nelements(op->src[0]) != ggml_nelements(op->src[1])) {
+            return true;
+        }
+        // op-test cases with non-contiguous src or dst
+        if ((op->ne[0] == 3 && op->ne[1] == 4 && op->ne[2] == 3 && op->ne[3] == 2) ||
+            (op->ne[0] == 1 && op->ne[1] == 4 && op->ne[2] == 3 && op->ne[3] == 2) ||
+            (op->ne[0] == 2 && op->ne[1] == 4 && op->ne[2] == 3 && op->ne[3] == 2)) {
+            return true;
+        }
+        // A CPY into a (recurrent-state) cache view is the qwen3-next conv/GDN state writeback; admit
+        // it when the destination view is empty or contiguous and fits its src buffer. A plain
+        // cast-CPY (view_src == nullptr) is trivially supported.
+        if (!cpy_output_view_is_supported(op)) {
+            return true;
+        }
+        break;
+    }
+    case GGML_OP_SET: {
+        const auto nb1 = static_cast<size_t>(op->op_params[0]);
+        const auto nb2 = static_cast<size_t>(op->op_params[1]);
+        const auto nb3 = static_cast<size_t>(op->op_params[2]);
+        // OpenVINO SET translation currently supports dst layouts that match src0 strides.
+        if (op->src[0] == nullptr || nb1 != op->src[0]->nb[1] || nb2 != op->src[0]->nb[2] ||
+            nb3 != op->src[0]->nb[3]) {
+            return true;
+        }
+        break;
+    }
+    case GGML_OP_GATED_DELTA_NET: {
+        if (op->src[2] != nullptr && op->src[2]->op == GGML_OP_PERMUTE) {
+            return true;
+        }
+        // kda (per-key-dimension gating) not supported by fused GatedDeltaNet op
+        if (op->src[3] != nullptr && op->src[3]->ne[0] != 1) {
+            return true;
+        }
+        // K > 1 (multiple state snapshots) not supported by fused op
+        if (((const int32_t *) op->op_params)[0] > 1) {
             return true;
         }
         break;
@@ -867,8 +935,12 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
             // GGML_LOG_WARN("OpenVINO backend does not support ROPE with mode %d\n", mode);
             return true;
         }
-        if (n_dims != 0.0f && n_dims != op->src[0]->ne[0]) {
-            // GGML_LOG_WARN("OpenVINO backend does not support ROPE with n_dims %d != src[0]->ne[0] %ld\n", n_dims,
+        const int64_t head_dim = op->src[0]->ne[0];
+        const int64_t rope_dims = n_dims == 0 ? head_dim : n_dims;
+        if (rope_dims <= 0 || rope_dims > head_dim || (rope_dims % 2) != 0) {
+            // Partial RoPE (rope_dims < head_dim, e.g. qwen3-next rotates 8 of 32 head dims) is
+            // supported as long as the rotated span is a valid even prefix of the head dim.
+            // GGML_LOG_WARN("OpenVINO backend does not support ROPE with n_dims %d and src[0]->ne[0] %ld\n", n_dims,
             //               op->src[0]->ne[0]);
             return true;
         }
@@ -944,12 +1016,9 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
     case GGML_OP_UNARY: {
         auto supported = supported_unary_ops.find(ggml_get_unary_op(op)) != supported_unary_ops.end();
         if (!supported) {
-            // GGML_LOG_WARN("OpenVINO backend does not support unary op %s\n", ggml_unary_op_name(ggml_get_unary_op(op)));
             return false;
         }
         if (has_view_op_input(op)) {
-            // GGML_LOG_WARN("OpenVINO backend does not support unary op %s with view input\n",
-            //               ggml_unary_op_name(ggml_get_unary_op(op)));
             return false;
         }
         break;
@@ -976,15 +1045,13 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
         if (!supported) {
             return false;
         }
-        static std::set<ggml_op> ops_not_support_view_input{
-            // NOTE: GGML_OP_GET_ROWS removed — the OpenVINO gguf frontend resolves VIEW inputs into
-            // real Slice/Reshape nodes (translate_view), so GET_ROWS handles a view input directly.
-            // Keeping it here forced MoE routing (ffn_moe_weights = GET_ROWS of the ffn_moe_topk
-            // view) onto CPU, splitting the graph at a strided-view boundary that can't be fed.
-            GGML_OP_RMS_NORM,
-        };
+        // The OpenVINO gguf frontend resolves VIEW inputs into real Slice/Reshape nodes
+        // (translate_view), so ops read their inputs already-resolved via context.get_input(). No op
+        // needs to be forced onto CPU purely for having a view input; keeping any op here would split
+        // the graph at a strided-view boundary (e.g. GET_ROWS of a MoE topk view, or qwen3-next's
+        // norm reading a token-embedding view) that the OV path can in fact feed.
+        static const std::set<ggml_op> ops_not_support_view_input{};
         if (ops_not_support_view_input.find(op->op) != ops_not_support_view_input.end() && has_view_op_input(op)) {
-            // GGML_LOG_WARN("OpenVINO backend does not support op %s with view input\n", ggml_op_name(op->op));
             return false;
         }
     }

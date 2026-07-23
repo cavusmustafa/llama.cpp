@@ -37,6 +37,82 @@
 #include <unordered_map>
 #include <vector>
 
+namespace {
+// An in-place op writes its result back into its view_src tensor rather than producing a fresh
+// buffer: SET_ROWS (KV-cache writeback), CPY into a recurrent-state cache view (conv/GDN state),
+// and SCALE of a recurrent-state cache view (the reset-by-0). For these the decoder routes the
+// node's output to the view_src's name so downstream consumers read the updated tensor.
+bool is_inplace_op(const ggml_tensor * node) {
+    if (node == nullptr) {
+        return false;
+    }
+    return node->op == GGML_OP_SET_ROWS || (node->op == GGML_OP_CPY && node->view_src != nullptr) ||
+           (node->op == GGML_OP_SCALE && node->view_src != nullptr);
+}
+
+// A VIEW's byte offset (op_params[0..1] as size_t).
+size_t view_byte_offset(const ggml_tensor * node) {
+    size_t byte_offset = 0;
+    std::memcpy(&byte_offset, node->op_params, sizeof(size_t));
+    return byte_offset;
+}
+
+// Detect the qwen3-next "feature-window + reshape" VIEW: a contiguous 2D source [F, T] (token count
+// T on ggml dim1) reinterpreted so the non-token node dims pack a contiguous feature sub-window
+// [off, off+feat_len) of F (e.g. q/k/v_conv split the mixed [4096, tok] conv output into per-head
+// tensors). Returns {off_elem, feat_len} on match (a slice of ggml dim0 == OV innermost axis,
+// followed by a reshape to the view's own layout), or {-1,-1} otherwise. This is a strided
+// reinterpretation the plain ne-comparison shrink/select detection cannot see.
+std::pair<int64_t, int64_t> detect_view_feature_window(const ggml_tensor * node) {
+    const ggml_tensor * src = node->src[0];
+    if (src == nullptr || src->op == GGML_OP_VIEW) {
+        return {-1, -1};
+    }
+    if (src->ne[2] != 1 || src->ne[3] != 1 || !ggml_is_contiguous(src)) {
+        return {-1, -1};  // src must be a contiguous 2D [F, T]
+    }
+    const size_t elem = ggml_type_size(src->type);
+    if (elem == 0 || src->nb[0] != elem) {
+        return {-1, -1};
+    }
+    const size_t token_stride = src->nb[1];  // bytes per token in src
+    // The token axis is the unique node dim whose stride equals the src token stride and whose
+    // extent equals T; every other node dim must index below the token stride (i.e. into F).
+    int token_dim = -1;
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        if (node->nb[i] == token_stride && node->ne[i] == src->ne[1]) {
+            token_dim = i;
+            break;
+        }
+    }
+    if (token_dim < 0) {
+        return {-1, -1};
+    }
+    int64_t feat_len = 1;
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        if (i == token_dim) {
+            continue;
+        }
+        if (node->ne[i] > 1 && node->nb[i] >= token_stride) {
+            return {-1, -1};
+        }
+        feat_len *= node->ne[i];
+    }
+    if (feat_len <= 0 || feat_len > src->ne[0]) {
+        return {-1, -1};
+    }
+    const size_t byte_offset = view_byte_offset(node);
+    if (byte_offset % elem != 0) {
+        return {-1, -1};
+    }
+    const int64_t off_elem = static_cast<int64_t>(byte_offset / elem);
+    if (off_elem < 0 || off_elem + feat_len > src->ne[0]) {
+        return {-1, -1};
+    }
+    return {off_elem, feat_len};
+}
+}  // namespace
+
 GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
                              ModelParams & model_params,
                              ComputeParams & compute_params,
@@ -259,11 +335,11 @@ void GgmlOvDecoder::set_input_output() {
         // per-expert "ffn_moe_weighted (view)" slices that would otherwise overwrite each other in
         // the frontend's name-keyed TensorMap).
         auto node_output_name = unique_tensor_name(node, node_name);
-        if (node->op == GGML_OP_SET_ROWS) {
-            // SET_ROWS updates the tensor in place. For later ov op that uses the
-            // the view_src of SET_ROWS, we need to make sure they get the updated tensor
-            // by putting the view_src name in the tensor_map in
-            // <openvino>/src/frontends/ggml/src/translate_session.cpp
+        if (is_inplace_op(node)) {
+            // In-place ops (SET_ROWS KV-cache writeback, CPY/SCALE into a recurrent-state cache
+            // view) update the tensor in place. For later ov ops that use the view_src, we route
+            // this node's output to the view_src name in the tensor_map (translate_session.cpp) so
+            // they read the updated tensor.
             node_output = node->view_src;
             node_output_name = unique_tensor_name(node->view_src, std::string(node->view_src->name));
         }
@@ -304,7 +380,15 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
     switch (node->op) {
     case GGML_OP_RESHAPE: {
         auto * src = node->src[0];
-        if (src->op == GGML_OP_RESHAPE && src->src[0]->ne[0] == node->ne[0] && src->src[0]->ne[1] == node->ne[1]) {
+        if (src->ne[0] == node->ne[0] && src->ne[1] == node->ne[1] && src->ne[2] == node->ne[2] &&
+            src->ne[3] == node->ne[3]) {
+            // Identity reshape (ggml src and node have the same ne, e.g. qwen3-next's
+            // linear_attn_qkv_mixed after the mul_mat): a no-op in ggml. Emitting a static reshape here
+            // would bake in the compile-time token count and fail at a differing runtime count (0-token
+            // decode). Pass the input through unchanged so the dynamic token axis is preserved.
+            op_case = 8;
+        } else if (src->op == GGML_OP_RESHAPE && src->src[0]->ne[0] == node->ne[0] &&
+                   src->src[0]->ne[1] == node->ne[1]) {
             op_case = 4;
         } else if (node->ne[0] * node->ne[1] == src->ne[0]) {
             op_case = 1;
@@ -317,6 +401,18 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
             op_case = 3;
         } else if (src->ne[1] * src->ne[2] == node->ne[1]) {
             op_case = 6;
+        } else {
+            // General fully-static reshape (no genuine variable token/sequence axis to preserve),
+            // e.g. qwen3-next's recurrent-state predelta reshape [262144] -> [16,128,128]. A dynamic
+            // dim marked on a size-1 axis contributes factor 1 and is not a real variable count, so
+            // treat it as static. Reshape straight to the static output shape.
+            const int dn = dynamic_dim_of(node);
+            const int ds = dynamic_dim_of(src);
+            const bool node_static = (dn == -1) || (node->ne[dn] == 1);
+            const bool src_static = (ds == -1) || (src->ne[ds] == 1);
+            if (node_static && src_static) {
+                op_case = 7;
+            }
         }
         break;
     }
@@ -383,6 +479,13 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
         break;
     }
     case GGML_OP_VIEW: {
+        if (node->src[0]->op == GGML_OP_GATED_DELTA_NET) {
+            // qwen3-next GDN packs its result as [attn_rows(T) | state_rows(S_v)] stacked on the row
+            // axis. attn_output-0 (byte_offset 0) reads the first T rows; new_state-0 (byte_offset>0)
+            // reads the last S_v rows. translate_view slices the packed output along that axis.
+            op_case = 4;
+            break;
+        }
         if (node->src[0]->op == GGML_OP_VIEW) {
             auto * src = node->src[0];
             if (ggml_nelements(node) != ggml_nelements(src)) {
@@ -402,17 +505,28 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
                 size_t byte_offset = 0;
                 std::memcpy(&byte_offset, node->op_params, sizeof(size_t));
                 int diff_count = 0;
+                int diff_dim = -1;
                 for (int i = 0; i < GGML_MAX_DIMS; i++) {
                     if (node->ne[i] != src->ne[i]) {
                         diff_count++;
+                        diff_dim = i;
                     }
                 }
-                // Two narrow MoE patterns only (must not perturb the working attention/FFN views);
-                // mirror get_view_slice's detection:
-                //   * pure shrink of one dim at offset 0 (ffn_moe_topk: 64->8), and
-                //   * select-one-index-and-drop-a-dim (per-expert ffn_moe_weighted: [2048,8,tok]
-                //     pick expert e -> [2048,tok]).
-                const bool pure_shrink_at_origin = (diff_count == 1) && (byte_offset == 0);
+                bool strides_preserved = true;
+                for (int i = 0; i < GGML_MAX_DIMS; i++) {
+                    if (node->nb[i] != src->nb[i]) {
+                        strides_preserved = false;
+                        break;
+                    }
+                }
+                // Shrink of exactly one dim keeping the parent strides. Two sub-cases:
+                //   * offset 0 (ffn_moe_topk: 64->8), and
+                //   * offset > 0 selecting a contiguous sub-range along that dim (qwen3-next
+                //     conv_state_last: last d_conv-1 columns of the conv window). The offset must be a
+                //     clean multiple of the sliced dim's stride. view_slice computes {axis,start,len}.
+                const bool pure_shrink =
+                    (diff_count == 1) && strides_preserved && diff_dim >= 0 && src->nb[diff_dim] > 0 &&
+                    (byte_offset % src->nb[diff_dim] == 0);
                 bool select_and_drop = false;
                 for (int d = 0; d < GGML_MAX_DIMS && !select_and_drop; ++d) {
                     if (src->ne[d] <= 1) {
@@ -435,7 +549,12 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
                     }
                     select_and_drop = match;
                 }
-                if (pure_shrink_at_origin || select_and_drop) {
+                // qwen3-next feature-window + reshape (q/k/v_conv split the mixed [F, tok] conv
+                // output into per-head tensors). Not a plain shrink/select -- detected via strides.
+                // It reuses op_case 3 (restore -> Slice -> Reshape-with-dynamic-token); view_slice
+                // and view_reshape return the window slice / target layout for it.
+                const bool feature_window = detect_view_feature_window(node).first >= 0;
+                if (pure_shrink || select_and_drop || feature_window) {
                     op_case = 3;
                 }
             }
@@ -566,6 +685,42 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             }
         }
     }
+    // Recurrent-state (SSM/DeltaNet, qwen3-next) detection: a second whole-graph pass, since the
+    // FLASH_ATTN_EXT loop above breaks at layer 0 and these ops live in the linear-attention layers.
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        auto * node = cgraph->nodes[i];
+        if (node->op == GGML_OP_GATED_DELTA_NET) {
+            // Recurrent-state row width, used by the frontend to slice the packed [attn|new_state].
+            model_params.state_size = node->src[0]->ne[0];
+        }
+        // In-place SCALE-by-0 that clears a slot block [idx, idx+len) of the recurrent-state cache on
+        // sequence reset. When absent (normal decode) the slot is preserved; we emit idx/len as graph
+        // inputs so one compiled model covers both. view_src is the cache; src[0] is the sliced view.
+        if (node->op == GGML_OP_SCALE && node->view_src != nullptr && is_kvcache(node->view_src, nullptr) &&
+            node->src[0] != nullptr && node->view_src->ne[0] != 0) {
+            compute_params.cache_rs_reset_len = (int) (ggml_nelements(node) / node->view_src->ne[0]);
+            compute_params.cache_rs_reset_idx = (int) (node->src[0]->view_offs / node->view_src->ne[0]);
+        }
+        // Active-slot block of the recurrent-state reorder (inp->s_copy): the active sequences occupy
+        // a contiguous slot block [idx, idx+len) of the state cache. Read idx/len from the active
+        // conv/gdn state writeback destination view (idx = head slot, len = active sequence count).
+        if (node->op == GGML_OP_CPY && node->view_src != nullptr && is_kvcache(node->view_src, nullptr) &&
+            node->src[0] != nullptr && node->src[0]->op == GGML_OP_VIEW && node->src[1] != nullptr) {
+            const bool is_conv = std::string(node->src[0]->name).find("conv_state_last") == 0;
+            const bool is_gdn =
+                node->src[0]->src[0] != nullptr && node->src[0]->src[0]->op == GGML_OP_GATED_DELTA_NET;
+            if (is_conv || is_gdn) {
+                const ggml_tensor * dest_view = node->src[1];
+                const ggml_tensor * cache = node->view_src;
+                const size_t row_bytes = cache->ne[0] * ggml_type_size(cache->type);
+                if (row_bytes > 0) {
+                    compute_params.s_copy_active_slot_idx = (int) (dest_view->view_offs / row_bytes);
+                    compute_params.s_copy_active_slot_len = (int) dest_view->ne[1];
+                }
+            }
+        }
+    }
+
     auto * output_tensor = cgraph->nodes[cgraph->n_nodes - 1];
     compute_params.output_len = output_tensor->ne[1];
     // for NPU, output_len is always 1 except for llama-perplexity
@@ -682,6 +837,18 @@ void GgmlOvDecoder::add_extra_inputs() {
         create_1d_input("token_len_per_seq", m_compute_params.token_len_per_seq);
     }
     // create_1d_input("token_len", m_token_len_per_seq * m_n_seq_active);
+
+    // Recurrent-state (qwen3-next) extra inputs: slot-reset block and active-slot block. Only
+    // surfaced when the graph actually carries recurrent state (values != -1), so non-recurrent
+    // models are unaffected.
+    if (m_compute_params.cache_rs_reset_idx != -1) {
+        create_1d_input("cache_rs_reset_idx", m_compute_params.cache_rs_reset_idx);
+        create_1d_input("cache_rs_reset_len", m_compute_params.cache_rs_reset_len);
+    }
+    if (m_compute_params.s_copy_active_slot_len != -1) {
+        create_1d_input("s_copy_active_slot_idx", m_compute_params.s_copy_active_slot_idx);
+        create_1d_input("s_copy_active_slot_len", m_compute_params.s_copy_active_slot_len);
+    }
 
     // Build the unified map returned by get_model_inputs() (primary + extra).
     m_all_model_inputs = m_model_inputs;
@@ -811,8 +978,9 @@ void GgmlOvDecoder::compute_model_outputs() {
         }
         auto cur_node_use_count = m_cgraph->use_counts[ggml_hash_find(&m_cgraph->visited_hash_set, cur_node)];
         if (cur_node_use_count == 0) {
-            // The output of SET_ROWS is the view_src tensor, which is updated in place. We should use the view_src name as the output name to make sure it can be correctly matched with the later ops that use the view_src.
-            if (cur_node != nullptr && cur_node->op == GGML_OP_SET_ROWS) {
+            // The output of an in-place op is the view_src tensor, which is updated in place. We use
+            // the view_src name as the output name so it matches later ops that use the view_src.
+            if (is_inplace_op(cur_node)) {
                 cur_node = cur_node->view_src;
             }
         } else {
@@ -1038,14 +1206,55 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                         }
                     }
                     if (matched_dim_count != 1) {
+                        // No output dim exactly matches the token axis: ggml_cont MERGED the token dim
+                        // into a larger contiguous output dim (qwen3-next's a/b: src [tok,8,2,1] ->
+                        // [8*tok,2,1,1], token folded into output dim 0). The token no longer has its
+                        // own axis, but the output dim into which it merged still VARIES with the token
+                        // count and must be dynamic. Locate it as the output dim whose contiguous
+                        // logical-stride range [nb[i], nb[i+1]) contains the token's stride.
                         m_node_dynamic_dims[node] = -1;
+                        for (int i = 0; i < GGML_MAX_DIMS; i++) {
+                            const size_t lo = node->nb[i];
+                            const size_t hi = (i + 1 < GGML_MAX_DIMS) ? node->nb[i + 1] : SIZE_MAX;
+                            if (dynamic_dim_stride >= lo && dynamic_dim_stride < hi) {
+                                m_node_dynamic_dims[node] = i;
+                                break;
+                            }
+                        }
                     }
                 }
             }
             break;
-        case GGML_OP_RMS_NORM:
-        case GGML_OP_NORM:
+        case GGML_OP_CONCAT:
+            // The token axis is the one CONCAT does NOT grow; find the first dim that differs.
+            m_node_dynamic_dims[node] = -1;
+            for (int d = 0; d < GGML_MAX_DIMS; d++) {
+                if (node->src[0]->ne[d] != node->ne[d]) {
+                    m_node_dynamic_dims[node] = d;
+                    break;
+                }
+            }
+            break;
+        case GGML_OP_SSM_CONV:
+        case GGML_OP_GATED_DELTA_NET:
+            // Recurrent linear-attention ops: token axis is ggml dim 1 (the sequence).
+            m_node_dynamic_dims[node] = 1;
+            break;
         case GGML_OP_ADD:
+        case GGML_OP_SUB:
+            // Elementwise binary: the token axis is whichever operand carries it. Prefer src[0], but
+            // fall back to src[1] -- a residual add can have the (static) recurrent/GDN branch as src[0]
+            // and the dynamic-token residual as src[1]; taking only src[0] drops the token axis and
+            // desyncs later layers (qwen3-next: a-0 dynamic but a-1 static). Both operands share the
+            // same token axis when both are dynamic, so src[0] wins by default.
+            m_node_dynamic_dims[node] = m_node_dynamic_dims[node->src[0]];
+            if (m_node_dynamic_dims[node] == -1 && node->src[1] != nullptr) {
+                m_node_dynamic_dims[node] = m_node_dynamic_dims[node->src[1]];
+            }
+            break;
+        case GGML_OP_RMS_NORM:
+        case GGML_OP_L2_NORM:
+        case GGML_OP_NORM:
         case GGML_OP_GLU:
         case GGML_OP_ROPE:
         case GGML_OP_SCALE:
@@ -1053,9 +1262,16 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
         case GGML_OP_ARGSORT:
         case GGML_OP_ADD_ID:
         case GGML_OP_UNARY:
+        case GGML_OP_CUMSUM:
+        case GGML_OP_FILL:
+        case GGML_OP_SET:
+        case GGML_OP_DIAG:
+        case GGML_OP_TRI:
+        case GGML_OP_REPEAT:
             m_node_dynamic_dims[node] = m_node_dynamic_dims[node->src[0]];
             break;
         case GGML_OP_MUL_MAT_ID:
+        case GGML_OP_SOLVE_TRI:
             m_node_dynamic_dims[node] = m_node_dynamic_dims[node->src[1]];
             break;
         case GGML_OP_CPY:
@@ -1502,6 +1718,32 @@ ov::Any GgmlOvDecoder::get_attribute(const std::string & name) const {
         // GGML_GLU_OP_SWIGLU_OAI (gpt-oss): limit at op_params[3].
         return ggml_get_op_params_f32(info.node, 3);
     }
+    if (name == "gdn_view") {
+        // GGML_OP_VIEW op_case 4: {part, s_v}. The GATED_DELTA_NET output packs T attention rows on
+        // top of S_v recurrent-state rows. part=0 => attn_output (first T rows, byte_offset 0);
+        // part=1 => new_state (last S_v rows, byte_offset > 0). s_v is the (static) state row count.
+        const ggml_tensor * node = info.node;
+        const ggml_tensor * gdn = node->src[0];
+        size_t byte_offset = 0;
+        std::memcpy(&byte_offset, node->op_params, sizeof(size_t));
+        // The packed row axis is ggml dim1 of the GDN output ([S_v*H_v, T + S_v]); its tail S_v rows
+        // are the state. new_state->ne is [S_v, S_v, H_v, 1] so S_v = gdn->ne[1] - T. Recover S_v from
+        // the state view's own element count when part==1; for part==0 it equals gdn->ne[1] minus the
+        // attn token rows. Use the GDN's second output view (new_state) shape: state rows = S_v.
+        const int64_t packed_rows = gdn->ne[1];
+        int64_t s_v = 0;
+        // state view: node->ne product / (S_v*H_v) gives S_v rows; simpler: state rows = packed_rows -
+        // attn_rows. attn_rows (T) = token count. We derive S_v directly from the GDN input state
+        // (src[5]) which is [S_v, S_v, H_v, 1]: its ne[0] is S_v.
+        const ggml_tensor * gdn_state_in = gdn->src[5];
+        if (gdn_state_in != nullptr) {
+            s_v = gdn_state_in->ne[0];
+        } else {
+            s_v = packed_rows;  // fallback (should not happen)
+        }
+        const int64_t part = (byte_offset == 0) ? 0 : 1;
+        return std::vector<int64_t>{part, s_v};
+    }
     if (name == "view_slice") {
         // GGML_OP_VIEW op_case 3: describe the view as a single-axis Slice of its base tensor,
         // returned as {ov_axis, start, len} in OV dim order (translate_view then Reshapes to the
@@ -1519,6 +1761,17 @@ ov::Any GgmlOvDecoder::get_attribute(const std::string & name) const {
         }
         size_t byte_offset = 0;
         std::memcpy(&byte_offset, node->op_params, sizeof(size_t));
+
+        // qwen3-next feature-window: slice a contiguous [off, off+len) sub-block of ggml dim0
+        // (OV innermost axis, rank-1) out of the mixed [F, tok] source. view_reshape then rearranges
+        // the sliced [len, tok] into the view's per-head layout.
+        {
+            auto win = detect_view_feature_window(node);
+            if (win.first >= 0) {
+                const int64_t ov_axis = GGML_MAX_DIMS - 1;  // ggml dim0
+                return std::vector<int64_t>{ov_axis, win.first, win.second};
+            }
+        }
 
         // Pure shrink: exactly one dim differs, same rank/order (topk 64->8). Distinguished from a
         // select-and-drop by strides: a pure shrink keeps the source strides verbatim (it is just a
@@ -1540,9 +1793,14 @@ ov::Any GgmlOvDecoder::get_attribute(const std::string & name) const {
                 break;
             }
         }
-        if (byte_offset == 0 && diff == 1 && strides_preserved) {
+        if (diff == 1 && strides_preserved && diff_dim >= 0 && src->nb[diff_dim] > 0 &&
+            byte_offset % src->nb[diff_dim] == 0) {
+            // Shrink one dim, keeping parent strides. The byte offset (a clean multiple of that dim's
+            // stride) gives the start index: 0 for a contiguous prefix (topk 64->8), or > 0 for a
+            // contiguous sub-range (conv_state_last: last d_conv-1 columns).
             int64_t ov_axis = (GGML_MAX_DIMS - 1) - diff_dim;
-            return std::vector<int64_t>{ov_axis, 0, node->ne[diff_dim]};
+            int64_t start = static_cast<int64_t>(byte_offset / src->nb[diff_dim]);
+            return std::vector<int64_t>{ov_axis, start, node->ne[diff_dim]};
         }
 
         // Select-and-drop: try each src dim d as the one collapsed to a single index.
@@ -1612,6 +1870,25 @@ ov::Any GgmlOvDecoder::get_attribute(const std::string & name) const {
         if (src == nullptr) {
             return std::vector<int64_t>{};
         }
+        // GDN packed-output view (op_case 4): return the view's own ggml layout in OV order.
+        // translate_view reshapes the sliced rows into it (placing -1 on the token axis for attn).
+        if (src->op == GGML_OP_GATED_DELTA_NET) {
+            std::vector<int64_t> tgt(GGML_MAX_DIMS);
+            for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+                tgt[i] = static_cast<int64_t>(node->ne[GGML_MAX_DIMS - 1 - i]);  // reverse to OV order
+            }
+            return tgt;
+        }
+        // qwen3-next feature-window: the Slice yields [len, tok] (OV [1,1,tok,len]); the view's own
+        // layout packs the window into per-head dims (e.g. [128,8,tok,1] -> OV [1,tok,8,128]). Return
+        // the static OV target; translate_view places the single -1 on the token axis.
+        if (detect_view_feature_window(node).first >= 0) {
+            std::vector<int64_t> tgt(GGML_MAX_DIMS);
+            for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+                tgt[i] = static_cast<int64_t>(node->ne[GGML_MAX_DIMS - 1 - i]);  // reverse to OV order
+            }
+            return tgt;
+        }
         // Detect select-and-drop: some src dim d (>1) collapses to a single index and is squeezed.
         int drop = -1;
         for (int d = GGML_MAX_DIMS - 1; d >= 0; --d) {
@@ -1646,6 +1923,22 @@ ov::Any GgmlOvDecoder::get_attribute(const std::string & name) const {
         std::vector<int64_t> tgt(GGML_MAX_DIMS);
         for (int i = 0; i < GGML_MAX_DIMS; ++i) {
             tgt[i] = static_cast<int64_t>(node->ne[GGML_MAX_DIMS - 1 - i]);  // reverse to OV order
+        }
+        return tgt;
+    }
+    if (name == "cont_reshape") {
+        // GGML_OP_CONT op_case 3 reshape-to-output target (OV dim order = ggml ne[] reversed). ggml_cont
+        // may merge/split dims relative to its VIEW source (qwen3-next a/b: [tok,8,2,1] -> [8*tok,2,1,1]).
+        // The token axis stays dynamic: mark the inferred dynamic output axis -1 in OV order so a 0-token
+        // decode step reshapes correctly. dynamic_dim_of() is in ggml dim order; reverse for OV.
+        const ggml_tensor * node = info.node;
+        std::vector<int64_t> tgt(GGML_MAX_DIMS);
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            tgt[i] = static_cast<int64_t>(node->ne[GGML_MAX_DIMS - 1 - i]);
+        }
+        const int d = dynamic_dim_of(node);
+        if (d != -1 && node->ne[d] > 1) {
+            tgt[GGML_MAX_DIMS - 1 - d] = -1;
         }
         return tgt;
     }
@@ -1686,6 +1979,22 @@ ov::Any GgmlOvDecoder::get_attribute(const std::string & name) const {
             perm[out_sd[i].second] = in_sd[i].second;
         }
         return perm;
+    }
+    if (name == "reshape_target") {
+        // GGML_OP_RESHAPE target shape (OV dim order = ggml ne[] reversed) with the inferred dynamic
+        // (token/sequence) axis marked -1. Used by op_cases that would otherwise bake the convert-time
+        // token count into a static reshape and fail when the stateful model is reused at a different
+        // count (qwen3-next q/k_conv_predelta: [128,2,8,T] -> [128,16,T,1], T dynamic).
+        const ggml_tensor * node = info.node;
+        std::vector<int64_t> tgt(GGML_MAX_DIMS);
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            tgt[i] = static_cast<int64_t>(node->ne[GGML_MAX_DIMS - 1 - i]);
+        }
+        const int d = dynamic_dim_of(node);
+        if (d != -1 && node->ne[d] > 1) {
+            tgt[GGML_MAX_DIMS - 1 - d] = -1;
+        }
+        return tgt;
     }
     if (name == "op_case") {
         return info.node_op_case;
