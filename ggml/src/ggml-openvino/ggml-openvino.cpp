@@ -985,6 +985,24 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
                                                GGML_TYPE_I32,  GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_K,
                                                GGML_TYPE_Q5_K, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K, GGML_TYPE_Q5_1,
                                                GGML_TYPE_MXFP4};
+    // DEBUG bisection seam: GGML_OPENVINO_DISABLE_TYPES is a comma-separated list of ggml type names
+    // (e.g. "Q8_0,Q6_K"). Any op whose output or a source is one of those types is forced onto the
+    // ggml CPU reference, isolating a suspect quant path. See docs/debugging_accuracy.md.
+    if (const char * disable = getenv("GGML_OPENVINO_DISABLE_TYPES")) {
+        std::string list = std::string(",") + disable + ",";
+        auto is_disabled = [&](ggml_type t) {
+            const char * tn = ggml_type_name(t);
+            return tn && list.find(std::string(",") + tn + ",") != std::string::npos;
+        };
+        if (is_disabled(op->type)) {
+            return false;
+        }
+        for (int i = 0; i < GGML_MAX_SRC && op->src[i]; i++) {
+            if (is_disabled(op->src[i]->type)) {
+                return false;
+            }
+        }
+    }
 
     static const std::set<ggml_op> supported_ops{GGML_OP_NONE, GGML_OP_ADD, GGML_OP_MUL, GGML_OP_MUL_MAT, GGML_OP_VIEW,
                                                  GGML_OP_CONT, GGML_OP_RESHAPE, GGML_OP_PERMUTE, GGML_OP_TRANSPOSE,
@@ -1011,6 +1029,18 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
         GGML_GLU_OP_SWIGLU_OAI,
         GGML_GLU_OP_GEGLU,
     };
+
+    // DEBUG bisection seam: GGML_OPENVINO_DISABLE_OPS is a comma-separated list of ggml op names
+    // (e.g. "SSM_CONV,CUMSUM,DIV") forced onto the ggml CPU reference instead of OV. Lets a single
+    // build A/B any op subset without recompiling. Remove/ignore in production. See
+    // src/frontends/gguf/docs/debugging_accuracy.md.
+    if (const char * disable = getenv("GGML_OPENVINO_DISABLE_OPS")) {
+        const char * name = ggml_op_name(op->op);
+        std::string list = std::string(",") + disable + ",";
+        if (name && list.find(std::string(",") + name + ",") != std::string::npos) {
+            return false;
+        }
+    }
 
     switch (op->op) {
     case GGML_OP_UNARY: {

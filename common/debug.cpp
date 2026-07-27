@@ -4,6 +4,9 @@
 #include "log.h"
 
 #include <cmath>
+#include <cstdlib>
+#include <fstream>
+#include <map>
 #include <regex>
 #include <string>
 #include <vector>
@@ -184,6 +187,26 @@ bool common_debug_cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
     if (!ggml_is_quantized(t->type) && matches_filter) {
         uint8_t * data = is_host ? (uint8_t *) t->data : pimpl->data.data();
         common_debug_print_tensor(data, t->type, t->ne, t->nb, 3, pimpl->abort_on_nan);
+    }
+
+    // Debug seam mirroring the OV backend's GGML_OPENVINO_DUMP_TENSOR: write the FULL flat contents
+    // (element order preserved) of any tensor whose name contains $GGML_DUMP_TENSOR to
+    // /tmp/ref_dump_<name>_<counter>.txt, for an element-wise cross-backend diff (means are
+    // permutation-invariant, so head-scramble/layout bugs are invisible to Min/Max/Mean).
+    if (const char * want = getenv("GGML_DUMP_TENSOR")) {
+        if (std::string(t->name).find(want) != std::string::npos && t->type == GGML_TYPE_F32) {
+            static std::map<std::string, int> counters;
+            uint8_t * data = is_host ? (uint8_t *) t->data : pimpl->data.data();
+            const float * f = (const float *) data;
+            int64_t n = ggml_nelements(t);
+            std::string base(t->name);
+            for (char & c : base) { if (c == '/' || c == ' ') c = '_'; }
+            std::string fname = "/tmp/ref_dump_" + base + "_" + std::to_string(counters[base]++) + ".txt";
+            std::ofstream ofs(fname);
+            ofs.precision(9);
+            for (int64_t i = 0; i < n; ++i) ofs << f[i] << "\n";
+            LOG("[GGML_DUMP_TENSOR] wrote %lld elems to %s\n", (long long) n, fname.c_str());
+        }
     }
 
     return true;

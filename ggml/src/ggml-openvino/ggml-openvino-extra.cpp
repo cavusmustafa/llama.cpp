@@ -52,6 +52,14 @@ void ggml_openvino_device_config::init() {
         compile_config.insert(ov::cache_mode(ov::CacheMode::OPTIMIZE_SIZE));
     }
 
+    // DEBUG: GGML_OPENVINO_FORCE_F32 pins the plugin to full f32 inference precision (ACCURACY mode),
+    // disabling the CPU plugin's default bf16 downconvert. Used to test whether an accuracy regression
+    // is bf16 rounding accumulation. See src/frontends/gguf/docs/debugging_accuracy.md.
+    if (getenv("GGML_OPENVINO_FORCE_F32")) {
+        compile_config[ov::hint::inference_precision.name()] = ov::element::f32;
+        compile_config[ov::hint::execution_mode.name()] = ov::hint::ExecutionMode::ACCURACY;
+    }
+
     // Initialize remote context with queue sharing for GPU
     if (device_name == "GPU") {
         // Create OpenCL context and queue
