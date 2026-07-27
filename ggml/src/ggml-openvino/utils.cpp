@@ -171,12 +171,18 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
             const auto * inp_pos = stateful ? find_inp_pos_tensor(cgraph) : nullptr;
             if (stateful && inp_pos != nullptr) {
                 int32_t * pos_data = (int32_t *) inp_pos->data;
-                auto pos_shape = ggml_decoder->get_shape(inp_pos);
+                // Advance by the number of tokens actually in this ubatch, not by the allocated size of
+                // the position buffer: ggml sizes inp_pos to n_batch and only fills the first input_len
+                // entries, so pos_shape[3] overstates the count whenever a ubatch is smaller than
+                // n_batch (chunked prefill, and every decode step). Overstating it desynchronizes
+                // stateful_kv_size from pos_data[0], which sends the next call into the cache-trim
+                // branch below with an out-of-range ROI end.
+                const size_t n_tokens = static_cast<size_t>(ggml_decoder->get_input_len());
                 if (pos_data[0] == 0) {
                     infer_request->reset_state();
-                    entry->stateful_kv_size = pos_shape[3];
+                    entry->stateful_kv_size = n_tokens;
                 } else if (entry->stateful_kv_size == static_cast<size_t>(pos_data[0])) {
-                    entry->stateful_kv_size += pos_shape[3];
+                    entry->stateful_kv_size += n_tokens;
                 } else {
                     auto states = infer_request->query_state();
                     for (auto state : states) {
@@ -274,8 +280,9 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
             if (stateful) {
                 const auto * inp_pos = find_inp_pos_tensor(cgraph);
                 if (inp_pos != nullptr) {
-                    auto pos_shape = ggml_decoder->get_shape(inp_pos);
-                    entry->stateful_kv_size = pos_shape[3];
+                    // Token count of this ubatch, not the allocated position-buffer size -- see the
+                    // note on the cache-hit path above.
+                    entry->stateful_kv_size = static_cast<size_t>(ggml_decoder->get_input_len());
                     const auto kv_param_res_names = ggml_decoder->get_kv_param_res_names();
                     for (const auto& pair : kv_param_res_names) {
                         r_ctx->kv_state_input_name_map[pair.first+pair.second] = pair.first;
