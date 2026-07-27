@@ -17,7 +17,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iomanip>
+#include <map>
 #include <iostream>
 #include <memory>
 #include <openvino/core/any.hpp>
@@ -39,11 +41,16 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
+// Debug seam (defined below): element-order full dump for element-wise cross-backend diff.
+void maybe_dump_full_tensor(const std::string & name, const ov::Tensor & tensor);
+
 enum ggml_status ov_graph_compute(ggml_cgraph * cgraph, ggml_backend_t backend) {
     ggml_backend_openvino_context * ctx = (ggml_backend_openvino_context *) backend->context;
     try {
         if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
-            std::string filename = "cgraph_ov.txt";
+            static int dump_counter = 0;
+            std::string filename = "cgraph_ov_" + std::to_string(dump_counter++) + ".txt";
+            GGML_LOG_INFO("OV subgraph #%d: n_nodes=%d -> %s\n", dump_counter - 1, cgraph->n_nodes, filename.c_str());
             GgmlOvDecoder::dump_cgraph(cgraph, filename);
         }
 
@@ -156,21 +163,26 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
                 infer_request = r_ctx->infer_request_cache.at(key);
             }
 
-            if (stateful) {
-                const auto * inp_pos = get_inp_pos_tensor(cgraph);
+            // A linear-attention-only subgraph (qwen3-next's GDN layers, split off from the
+            // full-attention layers) has no ROPE, hence no inp_pos, and carries only recurrent-state
+            // caches, which are stateless (ggml owns the buffer, round-tripped as I/O). The SDPA-KV
+            // stateful bookkeeping below applies only to attention subgraphs, so skip it when there is
+            // no position input rather than treating its absence as fatal.
+            const auto * inp_pos = stateful ? find_inp_pos_tensor(cgraph) : nullptr;
+            if (stateful && inp_pos != nullptr) {
                 int32_t * pos_data = (int32_t *) inp_pos->data;
                 auto pos_shape = ggml_decoder->get_shape(inp_pos);
                 if (pos_data[0] == 0) {
                     infer_request->reset_state();
-                    r_ctx->stateful_kv_size = pos_shape[3];
-                } else if (r_ctx->stateful_kv_size == static_cast<size_t>(pos_data[0])) {
-                    r_ctx->stateful_kv_size += pos_shape[3];
+                    entry->stateful_kv_size = pos_shape[3];
+                } else if (entry->stateful_kv_size == static_cast<size_t>(pos_data[0])) {
+                    entry->stateful_kv_size += pos_shape[3];
                 } else {
                     auto states = infer_request->query_state();
                     for (auto state : states) {
                         auto state_tensor = state.get_state();
                         auto state_tensor_shape = state_tensor.get_shape();
-                        if (static_cast<uint32_t>(pos_data[0]) > r_ctx->stateful_kv_size) {
+                        if (static_cast<uint32_t>(pos_data[0]) > entry->stateful_kv_size) {
                             std::string state_name;
                             try {
                                 state_name = r_ctx->kv_state_input_name_map.at(state.get_name());
@@ -190,7 +202,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
                         ov::Tensor new_state_tensor(state_tensor, begin, end);
                         state.set_state(new_state_tensor);
                     }
-                    r_ctx->stateful_kv_size = pos_data[0] + 1;
+                    entry->stateful_kv_size = pos_data[0] + 1;
                 }
             }
 
@@ -257,13 +269,17 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
                 r_ctx->ov_output_names_cache[key] = std::move(ov_output_names);
             }
 
+            // See the note above: a linear-attention-only subgraph has no inp_pos and no SDPA-KV
+            // state, so skip initializing the stateful KV bookkeeping for it.
             if (stateful) {
-                const auto * inp_pos = get_inp_pos_tensor(cgraph);
-                auto pos_shape = ggml_decoder->get_shape(inp_pos);
-                r_ctx->stateful_kv_size = pos_shape[3];
-                const auto kv_param_res_names = ggml_decoder->get_kv_param_res_names();
-                for (const auto& pair : kv_param_res_names) {
-                    r_ctx->kv_state_input_name_map[pair.first+pair.second] = pair.first;
+                const auto * inp_pos = find_inp_pos_tensor(cgraph);
+                if (inp_pos != nullptr) {
+                    auto pos_shape = ggml_decoder->get_shape(inp_pos);
+                    entry->stateful_kv_size = pos_shape[3];
+                    const auto kv_param_res_names = ggml_decoder->get_kv_param_res_names();
+                    for (const auto& pair : kv_param_res_names) {
+                        r_ctx->kv_state_input_name_map[pair.first+pair.second] = pair.first;
+                    }
                 }
             }
         }
@@ -288,6 +304,14 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
 
         for (size_t i = 0; i < ov_output_names.size(); i++) {
             auto * ggml_tensor = ggml_decoder->get_model_outputs().at(ov_output_names[i]);
+            // A zero-element ggml output (e.g. a 0-active-sequence recurrent-state cache writeback) has
+            // nothing to receive; set_output_tensor would reject the size-0 ggml tensor against the
+            // model's size-1 port. Skip the bind and let OV allocate its own (unused) output buffer.
+            // Test element count, not ggml_nbytes: a [12288,0,1,1] tensor has 0 elements but the
+            // (ne[0]-1)*nb[0] term keeps ggml_nbytes positive, so an nbytes check would not fire.
+            if (ggml_nelements(ggml_tensor) == 0) {
+                continue;
+            }
             auto output_tensor = create_ov_output_tensor(ggml_decoder, infer_request, i, ggml_tensor);
             infer_request->set_output_tensor(i, output_tensor);
         }
@@ -300,6 +324,9 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
                 const auto output_tensor = infer_request->get_output_tensor(i);
                 print_output_tensor_info(ov_output_names[i], output_tensor, output_tensor.data());
             }
+        }
+        for (size_t i = 0; i < ov_output_names.size(); i++) {
+            maybe_dump_full_tensor(ov_output_names[i], infer_request->get_output_tensor(i));
         }
 
         if (getenv("GGML_OPENVINO_PROFILING")) {
@@ -502,6 +529,9 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
 
             for (size_t i = 0; i < ov_output_names_local.size(); i++) {
                 auto * ggml_tensor = ggml_decoder->get_model_outputs().at(ov_output_names_local[i]);
+                if (ggml_nelements(ggml_tensor) == 0) {
+                    continue;
+                }
                 auto output_tensor = create_ov_output_tensor(ggml_decoder, infer_request, i, ggml_tensor);
                 infer_request->set_output_tensor(i, output_tensor);
             }
@@ -513,6 +543,9 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
                     const auto output_tensor = infer_request->get_output_tensor(i);
                     print_output_tensor_info(ov_output_names_local[i], output_tensor, output_tensor.data());
                 }
+            }
+            for (size_t i = 0; i < ov_output_names_local.size(); i++) {
+                maybe_dump_full_tensor(ov_output_names_local[i], infer_request->get_output_tensor(i));
             }
         }
         infer_end_time = ggml_time_us();
@@ -530,6 +563,9 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
 
         for (size_t i = 0; i < ov_output_names_local.size(); i++) {
             auto * ggml_tensor = ggml_decoder->get_model_outputs().at(ov_output_names_local[i]);
+            if (ggml_nelements(ggml_tensor) == 0) {
+                continue;
+            }
             auto output_tensor = create_ov_output_tensor(ggml_decoder, infer_request, i, ggml_tensor);
             infer_request->set_output_tensor(i, output_tensor);
         }
@@ -542,6 +578,9 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
                 const auto output_tensor = infer_request->get_output_tensor(i);
                 print_output_tensor_info(ov_output_names_local[i], output_tensor, output_tensor.data());
             }
+        }
+        for (size_t i = 0; i < ov_output_names_local.size(); i++) {
+            maybe_dump_full_tensor(ov_output_names_local[i], infer_request->get_output_tensor(i));
         }
     }
 
@@ -614,6 +653,13 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
     auto ov_results = model->get_results();
     for (size_t i = 0; i < ov_results.size(); i++) {
         auto * ggml_tensor = decoder->get_model_outputs().at(ov_results[i]->get_friendly_name());
+        // A 0-element ggml output (e.g. a qwen3-next recurrent-state reorder write with 0 active
+        // sequences) has nothing to receive, yet its OV Result port can be statically size 1. Binding
+        // a size-0 tensor to a size-1 port makes set_output_tensor throw. Skip the bind; OV keeps its
+        // own (unused) output buffer, which matches ggml's no-op semantics for the empty write.
+        if (ggml_nelements(ggml_tensor) == 0) {
+            continue;
+        }
         auto output_tensor = create_ov_output_tensor(decoder, infer_request, i, ggml_tensor);
         infer_request->set_output_tensor(i, output_tensor);
     }
@@ -633,7 +679,51 @@ ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
             throw std::runtime_error("ggml tensor extra is not of type TENSOR for input: " + name);
         }
         auto * tensor_extra = static_cast<ggml_openvino_tensor_extra *>(extra_base);
-        return *tensor_extra->tensor;
+        const ov::Tensor & ext = *tensor_extra->tensor;
+        // A ggml VIEW/RESHAPE shares its view_src's extra, whose ov::Tensor carries the *allocation*
+        // shape of the base buffer (e.g. the flat [1,1,1,24576] cache_r_l0 or the fused [1,1,5,8192]
+        // QKV), not this view's own logical shape. When such a view crosses an OV subgraph boundary as
+        // an input, the consuming subgraph's Parameter has the view's logical shape, so binding the raw
+        // extra tensor fails the shape check. Reconcile the two:
+        ov::Shape want = ggml_decoder->get_shape(ggml_tensor);
+        if (ext.get_shape() != want) {
+            if (ggml_is_contiguous(ggml_tensor) && ext.data() == ggml_tensor->data &&
+                ov::shape_size(ext.get_shape()) == ov::shape_size(want)) {
+                // Contiguous reshape/reinterpret of the whole buffer: re-wrap the same data.
+                return ov::Tensor(ext.get_element_type(), want, ext.data());
+            }
+            // Non-contiguous (strided) view -- e.g. qwen3-next's Qcur_view selecting the first 256 of
+            // each 512-wide fused-QKV row, or an offset sub-block. An ov::Tensor cannot wrap strided
+            // memory, so materialize the view's logical contents into a fresh contiguous tensor,
+            // copying with ggml's byte strides (nb[]). ggml tensors are at most 4D.
+            ov::Tensor dense(ext.get_element_type(), want);
+            const size_t esz = ggml_element_size(ggml_tensor);
+            const auto * src_base = static_cast<const char *>(ggml_tensor->data);
+            auto * dst = static_cast<char *>(dense.data());
+            const int64_t n0 = ggml_tensor->ne[0], n1 = ggml_tensor->ne[1];
+            const int64_t n2 = ggml_tensor->ne[2], n3 = ggml_tensor->ne[3];
+            const size_t nb0 = ggml_tensor->nb[0], nb1 = ggml_tensor->nb[1];
+            const size_t nb2 = ggml_tensor->nb[2], nb3 = ggml_tensor->nb[3];
+            size_t dst_off = 0;
+            for (int64_t i3 = 0; i3 < n3; ++i3) {
+                for (int64_t i2 = 0; i2 < n2; ++i2) {
+                    for (int64_t i1 = 0; i1 < n1; ++i1) {
+                        const char * row = src_base + i3 * nb3 + i2 * nb2 + i1 * nb1;
+                        if (nb0 == esz) {
+                            std::memcpy(dst + dst_off, row, n0 * esz);
+                            dst_off += n0 * esz;
+                        } else {
+                            for (int64_t i0 = 0; i0 < n0; ++i0) {
+                                std::memcpy(dst + dst_off, row + i0 * nb0, esz);
+                                dst_off += esz;
+                            }
+                        }
+                    }
+                }
+            }
+            return dense;
+        }
+        return ext;
     }
 
     // GGML_LOG_DEBUG("Converting ggml tensor to ov::Tensor for input: %s\n", name.c_str());
@@ -882,6 +972,39 @@ void print_output_tensor_info(const std::string & name, const ov::Tensor & tenso
     }
 }
 
+// Debug seam: dump the FULL flat contents of an output tensor to a file, one float per line, when
+// its name matches (substring) $GGML_OPENVINO_DUMP_TENSOR. Unlike print_output_tensor_info (which
+// only prints First/Min/Max/Mean -- all permutation-invariant, so blind to head-scramble/layout
+// bugs) this preserves element order for an element-wise cross-backend diff vs the ggml-CPU ref.
+void maybe_dump_full_tensor(const std::string & name, const ov::Tensor & tensor) {
+    const char * want = getenv("GGML_OPENVINO_DUMP_TENSOR");
+    if (!want || name.find(want) == std::string::npos) {
+        return;
+    }
+    static std::map<std::string, int> counters;
+    std::string base = name;
+    for (char & c : base) {
+        if (c == '/' || c == ' ') {
+            c = '_';
+        }
+    }
+    std::string fname = "/tmp/ov_dump_" + base + "_" + std::to_string(counters[base]++) + ".txt";
+    std::ofstream ofs(fname);
+    ofs << std::setprecision(9);
+    if (tensor.get_element_type() == ov::element::f32) {
+        const float * data = tensor.data<float>();
+        for (size_t i = 0; i < tensor.get_size(); ++i) {
+            ofs << data[i] << "\n";
+        }
+    } else if (tensor.get_element_type() == ov::element::f16) {
+        const ov::float16 * data = tensor.data<ov::float16>();
+        for (size_t i = 0; i < tensor.get_size(); ++i) {
+            ofs << static_cast<float>(data[i]) << "\n";
+        }
+    }
+    std::cout << "[DUMP_TENSOR] wrote " << tensor.get_size() << " elems to " << fname << std::endl;
+}
+
 void set_zero_diagonal(std::vector<float> & matrix, size_t rows, size_t cols) {
     for (size_t i = 0; i < rows; ++i) {
         size_t diag_col = std::min(i, cols - 1);
@@ -889,7 +1012,7 @@ void set_zero_diagonal(std::vector<float> & matrix, size_t rows, size_t cols) {
     }
 }
 
-const ggml_tensor * get_inp_pos_tensor(ggml_cgraph * cgraph) {
+const ggml_tensor * find_inp_pos_tensor(ggml_cgraph * cgraph) {
     for (int i = 0; i < cgraph->n_nodes; ++i) {
         auto * op = cgraph->nodes[i];
         for (int j = 0; j < GGML_MAX_SRC; ++j) {
@@ -902,8 +1025,16 @@ const ggml_tensor * get_inp_pos_tensor(ggml_cgraph * cgraph) {
             }
         }
     }
-    GGML_LOG_ERROR("get_inp_pos_tensor: inp_pos not found in cgraph");
-    throw std::runtime_error("get_inp_pos_tensor: inp_pos not found in cgraph");
+    return nullptr;
+}
+
+const ggml_tensor * get_inp_pos_tensor(ggml_cgraph * cgraph) {
+    const auto * inp_pos = find_inp_pos_tensor(cgraph);
+    if (inp_pos == nullptr) {
+        GGML_LOG_ERROR("get_inp_pos_tensor: inp_pos not found in cgraph");
+        throw std::runtime_error("get_inp_pos_tensor: inp_pos not found in cgraph");
+    }
+    return inp_pos;
 }
 
 bool get_is_prefill(const ggml_tensor * inp_pos) {

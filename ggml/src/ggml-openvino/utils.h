@@ -47,6 +47,11 @@ struct decoder_runtime_ctx {
     decoder_runtime_ctx(std::shared_ptr<std::mutex> mutex) : mutex(std::move(mutex)) {}
     std::shared_ptr<std::mutex> mutex;
     std::shared_ptr<GgmlOvDecoder> ptr;
+    // Stateful KV bookkeeping is PER-SUBGRAPH: qwen3-next splits into many attention subgraphs per
+    // token step, each with its own infer_request and its own KV state. A single shared counter on
+    // ov_runtime_context would be advanced once per subgraph within one decode step, so the second
+    // subgraph would see a stale size and mis-slice its state. Track it alongside the decoder.
+    size_t stateful_kv_size = 0;
 };
 
 struct ov_runtime_context {
@@ -60,14 +65,14 @@ struct ov_runtime_context {
     std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_output_names_cache;
     //TODO: Stateful is only supported for single request at a time.
     //      Simultanous stateful inference request support to be added.
-    size_t stateful_kv_size;
+    // stateful_kv_size now lives per-subgraph on decoder_runtime_ctx (qwen3-next splits into many
+    // attention subgraphs per step, each with independent KV state).
     std::map<std::string, std::string> kv_state_input_name_map;
     std::atomic<int> backend_count;
 
     ov_runtime_context() :
         device("CPU"),
         stateful(false),
-        stateful_kv_size(0),
         backend_count(0) {}
 
     void clear_caches() {
@@ -119,6 +124,9 @@ std::vector<T> pad_input(const ggml_tensor * tensor, size_t padded_rows, size_t 
 
 void set_zero_diagonal(std::vector<float> & matrix, size_t rows, size_t cols);
 
+// Returns the position input (ROPE src[1]) or nullptr if the (sub)graph has no ROPE, e.g. a
+// qwen3-next linear-attention-only split. get_inp_pos_tensor throws in that case instead.
+const ggml_tensor * find_inp_pos_tensor(struct ggml_cgraph * cgraph);
 const ggml_tensor * get_inp_pos_tensor(struct ggml_cgraph * cgraph);
 
 bool get_is_prefill(const ggml_tensor * inp_pos);
