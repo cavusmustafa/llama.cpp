@@ -101,6 +101,31 @@ std::pair<int64_t, int64_t> detect_view_feature_window(const ggml_tensor * node)
     if (feat_len <= 0 || feat_len > src->ne[0]) {
         return {-1, -1};
     }
+    // The window must be DENSELY packed on ggml dim0: the feature dims (non-token, non-singleton),
+    // sorted by ascending stride, must tile contiguously starting at elem (running stride == elem *
+    // product-of-smaller-extents). An interleaved split (qwen3.5 Q/gate: head stride 512 but head
+    // extent 256, leaving a 256-elem gate gap) fails this and must NOT be flattened into a contiguous
+    // [off, off+feat_len) slice -- that reinterprets the gap as feature data and scrambles the heads.
+    // detect_view_interleaved_window handles those via a stride-preserving reshape instead.
+    {
+        struct FeatDim { int64_t ne; size_t nb; };
+        std::vector<FeatDim> feats;
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            if (i == token_dim || node->ne[i] <= 1) {
+                continue;
+            }
+            feats.push_back({node->ne[i], node->nb[i]});
+        }
+        std::sort(feats.begin(), feats.end(),
+                  [](const FeatDim & a, const FeatDim & b) { return a.nb < b.nb; });
+        size_t running = elem;
+        for (const auto & f : feats) {
+            if (f.nb != running) {
+                return {-1, -1};  // gap between feature dims -> not a dense contiguous window
+            }
+            running *= static_cast<size_t>(f.ne);
+        }
+    }
     const size_t byte_offset = view_byte_offset(node);
     if (byte_offset % elem != 0) {
         return {-1, -1};
@@ -110,6 +135,112 @@ std::pair<int64_t, int64_t> detect_view_feature_window(const ggml_tensor * node)
         return {-1, -1};
     }
     return {off_elem, feat_len};
+}
+
+// Detect the qwen3.5 "interleaved feature window" VIEW: a contiguous 2D source [F, T] (token count
+// T on ggml dim1) split into per-head sub-blocks that are INTERLEAVED with another tensor along the
+// feature axis, so the per-head stride is larger than the per-head extent. E.g. the joint Q/gate
+// projection Qcur_full is [(head_dim*2)*n_head, T] laid out per token as
+// [Q_h0(head_dim), gate_h0(head_dim), Q_h1, gate_h1, ...]; the Q view is ne=[head_dim,n_head,T] with
+// head stride head_dim*2 (not head_dim), and the gate view is the same with byte_offset = head_dim.
+//
+// detect_view_feature_window rejects this (it requires the non-token dims to pack a *contiguous*
+// window), and the plain op_case-3 slice would treat [off, off+head_dim*n_head) as contiguous and
+// scramble the heads. This detector instead recovers the regular {group_count, group_stride,
+// inner_off, inner_len} tiling so translate_view can reshape src to expose the stride, slice the
+// inner sub-window, and reshape to the view's own per-head layout. Returns valid=false unless the
+// view is a clean, uniformly-strided window (so a genuine dense feature-window still takes the
+// simpler op_case-3 path).
+struct InterleavedWindow {
+    bool valid = false;
+    int64_t token_dim = -1;      // node dim carrying T
+    int64_t group_count = 1;     // number of interleaved groups packed on ggml dim0 (== n_head here)
+    int64_t group_stride = 0;    // element stride between consecutive groups on ggml dim0
+    int64_t inner_off = 0;       // element offset of the wanted sub-block within a group
+    int64_t inner_len = 0;       // element length of the wanted sub-block within a group
+};
+
+InterleavedWindow detect_view_interleaved_window(const ggml_tensor * node) {
+    InterleavedWindow w;
+    const ggml_tensor * src = node->src[0];
+    if (src == nullptr || src->op == GGML_OP_VIEW) {
+        return w;
+    }
+    if (src->ne[2] != 1 || src->ne[3] != 1 || !ggml_is_contiguous(src)) {
+        return w;  // src must be a contiguous 2D [F, T]
+    }
+    const size_t elem = ggml_type_size(src->type);
+    if (elem == 0 || src->nb[0] != elem) {
+        return w;
+    }
+    const size_t token_stride = src->nb[1];  // bytes per token in src
+    // Token axis: the unique node dim whose stride == src token stride and extent == T.
+    int token_dim = -1;
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        if (node->nb[i] == token_stride && node->ne[i] == src->ne[1]) {
+            token_dim = i;
+            break;
+        }
+    }
+    if (token_dim < 0) {
+        return w;
+    }
+    // Among the non-token dims, exactly one may carry the group stride (a dim whose byte stride is a
+    // multiple of elem and > its own extent*elem, i.e. leaves a gap). The innermost dim (ggml dim0)
+    // is the per-group sub-block. Require: node->nb[0] == elem (dense within the sub-block); a single
+    // "group" dim g with node->nb[g] % elem == 0 and stride/elem > inner_len; all other non-token
+    // dims singleton.
+    if (node->nb[0] != elem) {
+        return w;
+    }
+    const int64_t inner_len = node->ne[0];  // sub-block extent on ggml dim0 (e.g. head_dim)
+    int group_dim = -1;
+    for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+        if (i == token_dim) {
+            continue;
+        }
+        if (node->ne[i] <= 1) {
+            continue;  // singleton -> ignore
+        }
+        if (group_dim != -1) {
+            return w;  // more than one non-trivial group dim: not the simple interleaved split
+        }
+        group_dim = i;
+    }
+    if (group_dim < 0) {
+        return w;  // no repeated group -> a plain contiguous window, let feature-window handle it
+    }
+    if (node->nb[group_dim] % elem != 0) {
+        return w;
+    }
+    const int64_t group_stride = static_cast<int64_t>(node->nb[group_dim] / elem);
+    const int64_t group_count = node->ne[group_dim];
+    // The interleave is real only when the group stride exceeds the sub-block extent (a gap between
+    // groups). A stride equal to inner_len is a *dense* window (feature-window path handles it).
+    if (group_stride <= inner_len) {
+        return w;
+    }
+    const size_t byte_offset = view_byte_offset(node);
+    if (byte_offset % elem != 0) {
+        return w;
+    }
+    const int64_t off_elem = static_cast<int64_t>(byte_offset / elem);
+    // off_elem selects the sub-block within the first group; it must stay inside one group.
+    const int64_t inner_off = off_elem % group_stride;
+    if (off_elem / group_stride != 0 || inner_off + inner_len > group_stride) {
+        return w;
+    }
+    // The whole tiling must fit within src dim0.
+    if (group_stride * group_count > src->ne[0]) {
+        return w;
+    }
+    w.valid = true;
+    w.token_dim = token_dim;
+    w.group_count = group_count;
+    w.group_stride = group_stride;
+    w.inner_off = inner_off;
+    w.inner_len = inner_len;
+    return w;
 }
 }  // namespace
 
@@ -278,34 +409,47 @@ void GgmlOvDecoder::set_input_output() {
                 if (vsrc->buffer && vsrc->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY) {
                     continue;
                 }
-                // Must be a rank-reducing select-and-drop of exactly one axis (a per-layer pick).
-                if (src->type != vsrc->type || ggml_nelements(src) >= ggml_nelements(vsrc)) {
-                    continue;
-                }
-                bool select_and_drop = false;
-                for (int d = 0; d < GGML_MAX_DIMS && !select_and_drop; ++d) {
-                    if (vsrc->ne[d] <= 1 || src->ne[d] != 1) {
+                // qwen3-next recurrent-state slot reorder (inp->s_copy): a GET_ROWS that reorders a
+                // recurrent-state cache (src[0] lives in a USAGE_ANY buffer) indexes it with a VIEW of
+                // the s_copy leaf (src[1]). For the active-slot GET_ROWS that index VIEW happens to be a
+                // standalone cgraph node and is translated normally; for the reorder GET_ROWS it is
+                // anonymous (never a cgraph node), so without injection get_input(1) has nothing to
+                // resolve and the frontend throws. Inject it as a translated VIEW of the leaf, mirroring
+                // the standalone case, so both GET_ROWS resolve identically. This index VIEW is not a
+                // rank-reducing per-layer pick, so it bypasses the select-and-drop gate below.
+                const bool is_scopy_index = node->op == GGML_OP_GET_ROWS && i == 1 &&
+                                            node->src[0] != nullptr && node->src[0]->buffer != nullptr &&
+                                            node->src[0]->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY;
+                if (!is_scopy_index) {
+                    // Must be a rank-reducing select-and-drop of exactly one axis (a per-layer pick).
+                    if (src->type != vsrc->type || ggml_nelements(src) >= ggml_nelements(vsrc)) {
                         continue;
                     }
-                    int64_t squeezed[GGML_MAX_DIMS];
-                    int p = 0;
-                    for (int e = 0; e < GGML_MAX_DIMS; ++e) {
-                        if (e != d) {
-                            squeezed[p++] = vsrc->ne[e];
+                    bool select_and_drop = false;
+                    for (int d = 0; d < GGML_MAX_DIMS && !select_and_drop; ++d) {
+                        if (vsrc->ne[d] <= 1 || src->ne[d] != 1) {
+                            continue;
                         }
-                    }
-                    squeezed[p] = 1;
-                    bool match = true;
-                    for (int e = 0; e < GGML_MAX_DIMS; ++e) {
-                        if (src->ne[e] != squeezed[e]) {
-                            match = false;
-                            break;
+                        int64_t squeezed[GGML_MAX_DIMS];
+                        int p = 0;
+                        for (int e = 0; e < GGML_MAX_DIMS; ++e) {
+                            if (e != d) {
+                                squeezed[p++] = vsrc->ne[e];
+                            }
                         }
+                        squeezed[p] = 1;
+                        bool match = true;
+                        for (int e = 0; e < GGML_MAX_DIMS; ++e) {
+                            if (src->ne[e] != squeezed[e]) {
+                                match = false;
+                                break;
+                            }
+                        }
+                        select_and_drop = match;
                     }
-                    select_and_drop = match;
-                }
-                if (!select_and_drop) {
-                    continue;
+                    if (!select_and_drop) {
+                        continue;
+                    }
                 }
                 injected.insert(src);
 
@@ -554,8 +698,14 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
                 // It reuses op_case 3 (restore -> Slice -> Reshape-with-dynamic-token); view_slice
                 // and view_reshape return the window slice / target layout for it.
                 const bool feature_window = detect_view_feature_window(node).first >= 0;
+                const bool interleaved_window = detect_view_interleaved_window(node).valid;
                 if (pure_shrink || select_and_drop || feature_window) {
                     op_case = 3;
+                } else if (interleaved_window) {
+                    // qwen3.5 interleaved Q/gate split: a strided (non-dense) feature window that the
+                    // contiguous op_case-3 slice would scramble. translate_view reshapes to expose the
+                    // per-group stride, slices the inner sub-window, and keeps the token axis dynamic.
+                    op_case = 5;
                 }
             }
         }
@@ -787,6 +937,15 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
             if (d == -1) {
                 d = token_axis_from_consumer_views(input);
             }
+            // Validate against the subgraph's token count: the dynamic token axis must have that
+            // size. The ported stride-based inference can mis-resolve onto a same-shaped static axis
+            // (qwen3-next's MoE routing chain resolves ffn_moe_weights_norm-* onto the expert axis of
+            // size 10 instead of the token axis of size 5). If the picked axis's size does not match
+            // the token count, fall back to picking the axis by size.
+            const int tok_len = derived_token_len();
+            if (tok_len > 1 && (d == -1 || input->ne[d] != tok_len)) {
+                d = token_axis_by_input_len(input);
+            }
             if (d != -1) {
                 // dynamic_dim_of is in ggml dim order; OV shape is reversed.
                 input_shape[GGML_MAX_DIMS - 1 - d] = ov::Dimension::dynamic();
@@ -956,6 +1115,13 @@ void GgmlOvDecoder::compute_model_inputs() {
         ov::PartialShape vsrc_shape{get_shape(vsrc)};
         if (!m_is_static) {
             int d = token_axis_from_consumer_views(vsrc);
+            // Inter-subgraph boundary leaf (Qcur_full-* / Qcur_view-*): recover / validate the token
+            // axis by the prefill token count so the Parameter is not specialized to the prefill length
+            // (and a mis-resolved consumer-view axis of the wrong size is corrected).
+            const int tok_len = derived_token_len();
+            if (tok_len > 1 && (d == -1 || vsrc->ne[d] != tok_len)) {
+                d = token_axis_by_input_len(vsrc);
+            }
             if (d != -1) {
                 vsrc_shape[GGML_MAX_DIMS - 1 - d] = ov::Dimension::dynamic();
             }
@@ -1005,7 +1171,6 @@ void GgmlOvDecoder::compute_model_outputs() {
             m_model_output_names.push_back(node_output_name);
         }
     }
-
 
 }
 
@@ -1063,11 +1228,85 @@ int GgmlOvDecoder::token_axis_from_consumer_views(const ggml_tensor * input) con
     return -1;
 }
 
+int GgmlOvDecoder::derived_token_len() const {
+    int input_len = m_compute_params.input_len;
+    if (input_len <= 1) {
+        // FFN-only subgraphs (no FLASH_ATTN_EXT / ROPE) never populate input_len, but their other
+        // tensors do get a resolved dynamic axis via compute_node_dynamic_dims(); ne[dyn] on any of
+        // those is the subgraph's prefill token count. Recover it so a CPU-produced boundary leaf
+        // (e.g. ffn_moe_down-*) can be marked dynamic too. All resolved tensors agree on the count.
+        for (const auto & kv : m_node_dynamic_dims) {
+            if (kv.second != -1 && kv.first != nullptr) {
+                const int64_t n = kv.first->ne[kv.second];
+                if (n > 1) {
+                    input_len = static_cast<int>(n);
+                    break;
+                }
+            }
+        }
+    }
+    return input_len > 1 ? input_len : -1;
+}
+
+int GgmlOvDecoder::token_axis_by_input_len(const ggml_tensor * input) const {
+    const int input_len = derived_token_len();
+    if (input_len <= 1) {
+        return -1;  // decode step: token count 1 is ambiguous with static singleton dims
+    }
+    int match = -1;
+    for (int e = 0; e < GGML_MAX_DIMS; ++e) {
+        if (input->ne[e] == input_len) {
+            if (match != -1) {  // ambiguous -- more than one axis of that size
+                return -1;
+            }
+            match = e;
+        }
+    }
+    return match;
+}
+
 void GgmlOvDecoder::compute_node_dynamic_dims() {
     // Per-tensor inference (in ggml dim order 0..3) of the single variable token/sequence axis,
     // propagated stride-based from the token/position/output-index graph inputs through the ops.
     // Ported from the upstream ggml-openvino backend; -1 means the tensor is fully static. The
     // result is folded into the PartialShapes the frontend consumes (dynamic_dim_of()).
+
+    // Pre-seed inter-subgraph boundary leaves (qwen3-next's split graph). A leaf produced on CPU in
+    // another subgraph (e.g. Qcur_full-* fed into a full-attention split) has no in-subgraph producer,
+    // so the stride-based propagation below never reaches it and its downstream CONT/RESHAPE ops bake
+    // the prefill token count into a static reshape target -- which then fails to bind on the shorter
+    // decode call. Seed such a leaf's token axis (the unique ggml dim whose size equals the prefill
+    // token count) so propagation flows through it. input_len comes from FLASH_ATTN_EXT / ROPE, which
+    // these full-attention splits carry; FFN-only splits (input_len == -1) have no such leaf.
+    if (m_compute_params.input_len > 1) {
+        std::set<const ggml_tensor *> produced;
+        for (int i = 0; i < m_cgraph->n_nodes; i++) {
+            produced.insert(m_cgraph->nodes[i]);
+        }
+        for (int i = 0; i < m_cgraph->n_nodes; i++) {
+            ggml_tensor * node = m_cgraph->nodes[i];
+            for (int j = 0; j < GGML_MAX_SRC; j++) {
+                ggml_tensor * src = node->src[j];
+                if (src == nullptr || produced.count(src) || m_node_dynamic_dims.count(src)) {
+                    continue;
+                }
+                int match = -1;
+                for (int e = 0; e < GGML_MAX_DIMS; ++e) {
+                    if (src->ne[e] == m_compute_params.input_len) {
+                        if (match != -1) {  // ambiguous
+                            match = -1;
+                            break;
+                        }
+                        match = e;
+                    }
+                }
+                if (match != -1) {
+                    m_node_dynamic_dims[src] = match;
+                }
+            }
+        }
+    }
+
     auto visit_node = [&](auto && self, ggml_tensor * node) -> void {
         if (!node) {
             return;
@@ -1242,6 +1481,7 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             break;
         case GGML_OP_ADD:
         case GGML_OP_SUB:
+        case GGML_OP_DIV:
             // Elementwise binary: the token axis is whichever operand carries it. Prefer src[0], but
             // fall back to src[1] -- a residual add can have the (static) recurrent/GDN branch as src[0]
             // and the dynamic-token residual as src[1]; taking only src[0] drops the token axis and
@@ -1279,6 +1519,12 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             m_node_dynamic_dims[node] = -1;
             break;
         default:
+            // Explicitly mark unhandled ops static instead of leaving the node absent from the map.
+            // A later op reads m_node_dynamic_dims[src] with operator[], which would otherwise
+            // auto-insert 0 for a missing key -- falsely marking ggml dim0 dynamic and, after a
+            // reshape, resolving the wrong axis (qwen3-next's DIV-fed ffn_moe_weights_norm picked the
+            // expert axis instead of the token axis, baking the token count into the boundary output).
+            m_node_dynamic_dims[node] = -1;
             break;
         }
     };
@@ -1615,6 +1861,9 @@ ov::frontend::gguf::RopeConfig GgmlOvDecoder::get_rope_config() const {
     // gemma4-style mixed-layer models: each ROPE op has its own config, so the frontend skips the
     // shared sin/cos precompute and lets translate_rope build sin/cos per op.
     cfg.per_op = m_model_params.mixed_rope_params;
+    // op_params[2] holds the rope mode; IMROPE (qwen3.5/qwen3vl) needs the imrope sin/cos layout in
+    // the shared table too, not just per-op. rope_params (op_params[2]) is int, read directly.
+    cfg.is_imrope = (rp[2] == GGML_ROPE_TYPE_IMROPE);
     return cfg;
 }
 
@@ -1718,6 +1967,18 @@ ov::Any GgmlOvDecoder::get_attribute(const std::string & name) const {
         // GGML_GLU_OP_SWIGLU_OAI (gpt-oss): limit at op_params[3].
         return ggml_get_op_params_f32(info.node, 3);
     }
+    if (name == "view_interleaved") {
+        // GGML_OP_VIEW op_case 5 (qwen3.5 interleaved Q/gate split): return
+        // {group_count, group_stride, inner_off, inner_len} in ggml-dim0 element units. translate_view
+        // reshapes the contiguous src [F,T] to expose the per-group stride, slices the inner sub-window,
+        // and reshapes to the view's own per-head layout (keeping the token axis dynamic). Empty on
+        // no match (should not happen: op_case 5 is only set when detect_view_interleaved_window holds).
+        auto iw = detect_view_interleaved_window(info.node);
+        if (!iw.valid) {
+            return std::vector<int64_t>{};
+        }
+        return std::vector<int64_t>{iw.group_count, iw.group_stride, iw.inner_off, iw.inner_len};
+    }
     if (name == "gdn_view") {
         // GGML_OP_VIEW op_case 4: {part, s_v}. The GATED_DELTA_NET output packs T attention rows on
         // top of S_v recurrent-state rows. part=0 => attn_output (first T rows, byte_offset 0);
@@ -1769,7 +2030,18 @@ ov::Any GgmlOvDecoder::get_attribute(const std::string & name) const {
             auto win = detect_view_feature_window(node);
             if (win.first >= 0) {
                 const int64_t ov_axis = GGML_MAX_DIMS - 1;  // ggml dim0
-                return std::vector<int64_t>{ov_axis, win.first, win.second};
+                int64_t start = win.first;
+                const int64_t len = win.second;
+                // conv_state_last is the last d_conv-1 columns of the conv window (src dim0), whose
+                // length ncs = n_t + d_conv-1 is DYNAMIC (n_t differs prefill vs decode). A tail slice
+                // (start + len == compile-time ncs) must be end-anchored, else the baked absolute
+                // start over-reads by (prefill_ncs - decode_ncs) and OV clamps conv_state_last to
+                // d_conv-2 columns -> the writeback reshape fails. Encode start = -len so
+                // translate_view emits a negative-begin Slice that always takes the last len columns.
+                if (start > 0 && start + len == node->src[0]->ne[0]) {
+                    start = -len;
+                }
+                return std::vector<int64_t>{ov_axis, start, len};
             }
         }
 
@@ -1800,7 +2072,8 @@ ov::Any GgmlOvDecoder::get_attribute(const std::string & name) const {
             // contiguous sub-range (conv_state_last: last d_conv-1 columns).
             int64_t ov_axis = (GGML_MAX_DIMS - 1) - diff_dim;
             int64_t start = static_cast<int64_t>(byte_offset / src->nb[diff_dim]);
-            return std::vector<int64_t>{ov_axis, start, node->ne[diff_dim]};
+            const int64_t len = node->ne[diff_dim];
+            return std::vector<int64_t>{ov_axis, start, len};
         }
 
         // Select-and-drop: try each src dim d as the one collapsed to a single index.
@@ -1883,6 +2156,15 @@ ov::Any GgmlOvDecoder::get_attribute(const std::string & name) const {
         // layout packs the window into per-head dims (e.g. [128,8,tok,1] -> OV [1,tok,8,128]). Return
         // the static OV target; translate_view places the single -1 on the token axis.
         if (detect_view_feature_window(node).first >= 0) {
+            std::vector<int64_t> tgt(GGML_MAX_DIMS);
+            for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+                tgt[i] = static_cast<int64_t>(node->ne[GGML_MAX_DIMS - 1 - i]);  // reverse to OV order
+            }
+            return tgt;
+        }
+        // qwen3.5 interleaved Q/gate window (op_case 5): same contract -- return the view's own OV
+        // layout; translate_view slices the per-group sub-window then reshapes to this (token -> -1).
+        if (detect_view_interleaved_window(node).valid) {
             std::vector<int64_t> tgt(GGML_MAX_DIMS);
             for (int i = 0; i < GGML_MAX_DIMS; ++i) {
                 tgt[i] = static_cast<int64_t>(node->ne[GGML_MAX_DIMS - 1 - i]);  // reverse to OV order

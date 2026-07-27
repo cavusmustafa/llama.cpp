@@ -285,6 +285,19 @@ private:
     // select-and-drop VIEW keeps and that is not dim0 (the embedding width) -- i.e. the token axis --
     // or -1 if no such consumer exists.
     int token_axis_from_consumer_views(const ggml_tensor * input) const;
+    // Last-resort token-axis recovery for an inter-subgraph boundary leaf produced on CPU (qwen3-next's
+    // split graph feeds e.g. Qcur_full-* / Qcur_view-* into an OV subgraph). Such a tensor has no
+    // in-subgraph producer and no select-and-drop consumer, so both dynamic_dim_of() and
+    // token_axis_from_consumer_views() bottom out; without this it would bake the prefill token count
+    // and the shorter decode call would fail to bind. Recover the token axis as the (unique) ggml dim
+    // whose size equals the prefill token count; only meaningful during prefill (input_len > 1), where
+    // that size is unambiguous. Returns the ggml dim (0..3) or -1.
+    int token_axis_by_input_len(const ggml_tensor * input) const;
+    // The subgraph's prefill token count, or -1 if not determinable (decode step / no dynamic tensor).
+    // Prefers m_compute_params.input_len; falls back to ne[dyn] of any tensor whose dynamic axis
+    // compute_node_dynamic_dims() resolved (all agree on the count) -- FFN-only splits never set
+    // input_len. Used to recover / validate token axes for CPU-produced boundary leaves.
+    int derived_token_len() const;
 
     void validate_cgraph() const;
 
