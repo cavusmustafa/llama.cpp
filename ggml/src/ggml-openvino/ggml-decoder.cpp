@@ -1861,9 +1861,14 @@ ov::frontend::gguf::RopeConfig GgmlOvDecoder::get_rope_config() const {
     // gemma4-style mixed-layer models: each ROPE op has its own config, so the frontend skips the
     // shared sin/cos precompute and lets translate_rope build sin/cos per op.
     cfg.per_op = m_model_params.mixed_rope_params;
-    // op_params[2] holds the rope mode; IMROPE (qwen3.5/qwen3vl) needs the imrope sin/cos layout in
-    // the shared table too, not just per-op. rope_params (op_params[2]) is int, read directly.
-    cfg.is_imrope = (rp[2] == GGML_ROPE_TYPE_IMROPE);
+    // op_params[2] holds the rope mode; map ggml's enum onto the frontend-local RopeConfig::Type.
+    // The shared sin/cos table (built at model scope in TranslateSession::preprocess) needs this
+    // because there is no ROPE node -- hence no op_case -- available at that point.
+    switch (rp[2]) {
+    case GGML_ROPE_TYPE_NEOX:   cfg.mode = ov::frontend::gguf::RopeConfig::Type::NEOX;   break;
+    case GGML_ROPE_TYPE_IMROPE: cfg.mode = ov::frontend::gguf::RopeConfig::Type::IMROPE; break;
+    default:                    cfg.mode = ov::frontend::gguf::RopeConfig::Type::NORMAL; break;
+    }
     return cfg;
 }
 
