@@ -591,14 +591,23 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
     case GGML_TYPE_Q5_K:
         break;
 
+    case GGML_TYPE_PQ2_0:
+        // Ternary: codes {0,1,2} dequantized as (code - 1) * scale. The zero point is the
+        // same for every block, so make_int2_weights emits it as a scalar and no zp array
+        // is stored here (is_symmetric only means "no per-block zp" in this layout).
+        layout.is_u2 = true;
+        layout.weights_per_block = 128;
+        layout.is_symmetric = true;
+        break;
+
     default:
         // Unsupported quantization type
         return layout;
     }
 
     // Calculate sizes
-    // Weights: U4 = n_elements/2 bytes, U8 = n_elements bytes
-    layout.weights_size = layout.is_u4 ? (n_elements / 2) : n_elements;
+    // Weights: U2 = n_elements/4 bytes, U4 = n_elements/2 bytes, U8 = n_elements bytes
+    layout.weights_size = layout.is_u2 ? (n_elements / 4) : (layout.is_u4 ? (n_elements / 2) : n_elements);
 
     // Scales: F16 per block, except MXFP4 which stores one E8M0 byte per block.
     int64_t n_blocks = n_elements / layout.weights_per_block;
