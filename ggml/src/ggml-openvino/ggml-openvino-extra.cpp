@@ -356,6 +356,12 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
     if (no_requant) {
         return std::nullopt;
     }
+    // Ternary weights are already at 2 bits and OpenVINO carries them natively as u2. Every
+    // requant target here is 4 bit or wider, so it would inflate them and also lose the ternary
+    // FullyConnected path, which is the only one that applies a fused Hadamard input transform.
+    if (tensor->type == GGML_TYPE_PQ2_0) {
+        return std::nullopt;
+    }
     if (strncmp(tensor->name, "token_embd.weight", 17) == 0) {
         return ((ggml_openvino_is_npu() && tensor->type == GGML_TYPE_Q6_K) ? ExtraQuantType::F16 :
                                                                              ExtraQuantType::Q8_0_C);
