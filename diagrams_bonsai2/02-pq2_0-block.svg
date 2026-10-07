@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 620" width="1000" height="620" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="620" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">PQ2_0 - how a ternary weight block is stored</text>
+<text x="24" y="56" font-size="13" fill="#6b7480">"Prism Q2_0". A ggml type private to the PrismML fork (type id 142). Every weight is -1, 0 or +1.</text>
+
+<!-- block layout -->
+<text x="24" y="92" font-size="14" font-weight="600" fill="#1b1f24">One block = 128 weights = 34 bytes</text>
+
+<rect x="24" y="104" width="86" height="46" rx="4" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="67" y="124" font-size="12" font-weight="600" text-anchor="middle" fill="#2f6fb3">d</text>
+<text x="67" y="141" font-size="11" text-anchor="middle" fill="#1b1f24">f16 scale</text>
+
+<rect x="114" y="104" width="620" height="46" rx="4" fill="#e4f1ef" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="424" y="124" font-size="12" font-weight="600" text-anchor="middle" fill="#2a8c82">qs[32]  -  32 bytes</text>
+<text x="424" y="141" font-size="11" text-anchor="middle" fill="#1b1f24">128 codes x 2 bits, 4 codes packed per byte</text>
+
+<text x="748" y="123" font-size="12" fill="#1b1f24">2 + 32 = 34 bytes</text>
+<text x="748" y="141" font-size="12" fill="#1b1f24">34 x 8 / 128 = <tspan font-weight="600">2.125 bpw</tspan></text>
+
+<!-- byte zoom -->
+<text x="24" y="188" font-size="14" font-weight="600" fill="#1b1f24">Inside one byte of qs - code j sits at bits [2j, 2j+1], lowest bits first</text>
+
+<rect x="24" y="202" width="440" height="56" rx="4" fill="#f7f9fb" stroke="#8a93a0"/>
+<line x1="134" y1="202" x2="134" y2="258" stroke="#8a93a0"/>
+<line x1="244" y1="202" x2="244" y2="258" stroke="#8a93a0"/>
+<line x1="354" y1="202" x2="354" y2="258" stroke="#8a93a0"/>
+<text x="79" y="224" font-size="12" text-anchor="middle" fill="#6b7480">bits 7..6</text>
+<text x="189" y="224" font-size="12" text-anchor="middle" fill="#6b7480">bits 5..4</text>
+<text x="299" y="224" font-size="12" text-anchor="middle" fill="#6b7480">bits 3..2</text>
+<text x="409" y="224" font-size="12" text-anchor="middle" fill="#6b7480">bits 1..0</text>
+<text x="79" y="246" font-size="13" font-weight="600" text-anchor="middle" fill="#1b1f24">code 3</text>
+<text x="189" y="246" font-size="13" font-weight="600" text-anchor="middle" fill="#1b1f24">code 2</text>
+<text x="299" y="246" font-size="13" font-weight="600" text-anchor="middle" fill="#1b1f24">code 1</text>
+<text x="409" y="246" font-size="13" font-weight="600" text-anchor="middle" fill="#1b1f24">code 0</text>
+
+<text x="484" y="222" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">byte_index = j / 4</text>
+<text x="484" y="242" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">bit_offset = (j % 4) * 2</text>
+<text x="484" y="262" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">code = (qs[byte_index] &gt;&gt; bit_offset) &amp; 0x03</text>
+
+<!-- code table -->
+<text x="24" y="302" font-size="14" font-weight="600" fill="#1b1f24">Code meaning</text>
+<rect x="24" y="314" width="330" height="112" rx="5" fill="#f7f9fb" stroke="#8a93a0"/>
+<line x1="24" y1="340" x2="354" y2="340" stroke="#8a93a0"/>
+<line x1="114" y1="314" x2="114" y2="426" stroke="#8a93a0"/>
+<line x1="214" y1="314" x2="214" y2="426" stroke="#8a93a0"/>
+<text x="69" y="332" font-size="12" font-weight="600" text-anchor="middle" fill="#6b7480">code</text>
+<text x="164" y="332" font-size="12" font-weight="600" text-anchor="middle" fill="#6b7480">code - 1</text>
+<text x="284" y="332" font-size="12" font-weight="600" text-anchor="middle" fill="#6b7480">value</text>
+<text x="69" y="360" font-size="12" text-anchor="middle" fill="#1b1f24">0</text><text x="164" y="360" font-size="12" text-anchor="middle" fill="#1b1f24">-1</text><text x="284" y="360" font-size="12" text-anchor="middle" fill="#1b1f24">-d</text>
+<text x="69" y="382" font-size="12" text-anchor="middle" fill="#1b1f24">1</text><text x="164" y="382" font-size="12" text-anchor="middle" fill="#1b1f24">0</text><text x="284" y="382" font-size="12" text-anchor="middle" fill="#1b1f24">0</text>
+<text x="69" y="404" font-size="12" text-anchor="middle" fill="#1b1f24">2</text><text x="164" y="404" font-size="12" text-anchor="middle" fill="#1b1f24">+1</text><text x="284" y="404" font-size="12" text-anchor="middle" fill="#1b1f24">+d</text>
+<text x="69" y="421" font-size="11" text-anchor="middle" fill="#c0392b">3</text><text x="164" y="421" font-size="11" text-anchor="middle" fill="#c0392b">+2</text><text x="284" y="421" font-size="11" text-anchor="middle" fill="#c0392b">unused</text>
+
+<rect x="374" y="314" width="360" height="72" rx="5" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="390" y="336" font-size="13" font-weight="600" fill="#2f6fb3">Dequantization</text>
+<text x="390" y="362" font-size="14" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">value = (code - 1) * d</text>
+<text x="390" y="378" font-size="11" fill="#6b7480">one subtract, one multiply - that is the whole codec</text>
+
+<text x="374" y="410" font-size="11.5" fill="#6b7480">"2 bits for 3 values" wastes one slot (code 3 is never used),</text>
+<text x="374" y="427" font-size="11.5" fill="#6b7480">which is the price for making unpacking a shift and a mask.</text>
+
+<!-- comparison -->
+<text x="24" y="470" font-size="14" font-weight="600" fill="#1b1f24">Why 2.125 bpw and not 1.58</text>
+<rect x="24" y="482" width="952" height="104" rx="5" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="40" y="504" font-size="11.5" fill="#1b1f24">log2(3) = 1.585 bits is the information-theoretic floor for a trit. Prism ships two packings that trade size against unpack cost:</text>
+<text x="40" y="528" font-size="12" fill="#1b1f24"><tspan font-weight="600">PQ2_0</tspan>  - one trit per 2-bit slot, 128 per group  -  2.125 bpw  -  7.21 GB  -  unpack = shift + mask  -  <tspan fill="#2d8a4e">used here</tspan></text>
+<text x="40" y="548" font-size="12" fill="#1b1f24"><tspan font-weight="600">PTQ1_0</tspan> - 5 trits packed into a byte in base 3, 128 per group  -  1.75 bpw  -  5.95 GB  -  unpack = divides by 3</text>
+<text x="40" y="572" font-size="11.5" fill="#6b7480">The group of 128 also matters: one f16 scale per 128 weights adds 16/128 = 0.125 bpw. That is where 2.0 + 0.125 comes from.</text>
+</svg>

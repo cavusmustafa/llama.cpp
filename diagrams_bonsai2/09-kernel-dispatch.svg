@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 620" width="1000" height="620" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="620" fill="#ffffff"/>
+<defs><marker id="a7" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#8a93a0"/></marker></defs>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">How one compiled model uses different kernels for prefill and decode</text>
+<text x="24" y="56" font-size="13" fill="#6b7480">There is no "prefill model" and no "decode model". The choice happens per inference call, inside the matmul primitive.</text>
+
+<!-- flow -->
+<rect x="24" y="78" width="232" height="52" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="140" y="99" font-size="12" font-weight="600" text-anchor="middle" fill="#1b1f24">ONE compiled OV model</text>
+<text x="140" y="118" font-size="11" text-anchor="middle" fill="#6b7480">token dimension is dynamic</text>
+<path d="M 260 104 L 292 104" stroke="#8a93a0" stroke-width="2" marker-end="url(#a7)"/>
+
+<rect x="296" y="78" width="252" height="52" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="422" y="99" font-size="12" font-weight="600" text-anchor="middle" fill="#2f6fb3">execute_impl runs, per call</text>
+<text x="422" y="118" font-size="10.5" font-family="ui-monospace, Consolas, monospace" text-anchor="middle" fill="#1b1f24">M = output_shape elems / N</text>
+<path d="M 552 104 L 584 104" stroke="#8a93a0" stroke-width="2" marker-end="url(#a7)"/>
+
+<rect x="588" y="78" width="212" height="52" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="694" y="99" font-size="12" font-weight="600" text-anchor="middle" fill="#1b1f24">launch_class(M)</text>
+<text x="694" y="118" font-size="11" text-anchor="middle" fill="#6b7480">buckets M into 8 classes</text>
+<path d="M 804 104 L 836 104" stroke="#8a93a0" stroke-width="2" marker-end="url(#a7)"/>
+
+<rect x="840" y="78" width="136" height="52" rx="6" fill="#eaf5ee" stroke="#2d8a4e" stroke-width="1.5"/>
+<text x="908" y="99" font-size="12" font-weight="600" text-anchor="middle" fill="#2d8a4e">cached kernel</text>
+<text x="908" y="118" font-size="10.5" text-anchor="middle" fill="#6b7480">built on first use</text>
+
+<!-- table -->
+<text x="24" y="168" font-size="14" font-weight="600" fill="#1b1f24">The 8 launch classes</text>
+<rect x="24" y="180" width="952" height="212" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+<line x1="24" y1="208" x2="976" y2="208" stroke="#8a93a0"/>
+<line x1="120" y1="180" x2="120" y2="392" stroke="#8a93a0"/>
+<line x1="236" y1="180" x2="236" y2="392" stroke="#8a93a0"/>
+<line x1="520" y1="180" x2="520" y2="392" stroke="#8a93a0"/>
+<line x1="700" y1="180" x2="700" y2="392" stroke="#8a93a0"/>
+
+<text x="72" y="200" font-size="11.5" font-weight="600" text-anchor="middle" fill="#6b7480">class</text>
+<text x="178" y="200" font-size="11.5" font-weight="600" text-anchor="middle" fill="#6b7480">M (tokens)</text>
+<text x="378" y="200" font-size="11.5" font-weight="600" text-anchor="middle" fill="#6b7480">OpenCL kernel</text>
+<text x="610" y="200" font-size="11.5" font-weight="600" text-anchor="middle" fill="#6b7480">shape</text>
+<text x="838" y="200" font-size="11.5" font-weight="600" text-anchor="middle" fill="#6b7480">when it is used</text>
+
+<rect x="24" y="208" width="952" height="76" fill="#e4f1ef" opacity="0.5"/>
+<text x="72" y="226" font-size="11.5" text-anchor="middle" fill="#1b1f24">0</text><text x="178" y="226" font-size="11.5" text-anchor="middle" fill="#1b1f24">M = 1</text>
+<text x="72" y="245" font-size="11.5" text-anchor="middle" fill="#1b1f24">1</text><text x="178" y="245" font-size="11.5" text-anchor="middle" fill="#1b1f24">M = 2</text>
+<text x="72" y="264" font-size="11.5" text-anchor="middle" fill="#1b1f24">2</text><text x="178" y="264" font-size="11.5" text-anchor="middle" fill="#1b1f24">M &lt;= 4</text>
+<text x="72" y="281" font-size="11.5" text-anchor="middle" fill="#1b1f24">3</text><text x="178" y="281" font-size="11.5" text-anchor="middle" fill="#1b1f24">M &lt;= 8</text>
+<text x="248" y="245" font-size="11.5" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">int2_fp16_upcvt_gemm</text>
+<text x="248" y="263" font-size="11" fill="#6b7480">(tile param SGM = 1 / 2 / 4 / 8)</text>
+<text x="610" y="245" font-size="11.5" text-anchor="middle" fill="#1b1f24">GEMV</text>
+<text x="610" y="263" font-size="10.5" text-anchor="middle" fill="#6b7480">tall-skinny</text>
+<text x="838" y="245" font-size="11.5" font-weight="600" text-anchor="middle" fill="#2a8c82">DECODE</text>
+<text x="838" y="263" font-size="10.5" text-anchor="middle" fill="#6b7480">one token at a time</text>
+
+<text x="72" y="306" font-size="11.5" text-anchor="middle" fill="#1b1f24">4</text><text x="178" y="306" font-size="11.5" text-anchor="middle" fill="#1b1f24">M &lt;= 16</text>
+<text x="72" y="325" font-size="11.5" text-anchor="middle" fill="#1b1f24">5</text><text x="178" y="325" font-size="11.5" text-anchor="middle" fill="#1b1f24">M &lt;= 32</text>
+<text x="72" y="344" font-size="11.5" text-anchor="middle" fill="#1b1f24">6</text><text x="178" y="344" font-size="11.5" text-anchor="middle" fill="#1b1f24">M &lt; 64</text>
+<text x="72" y="363" font-size="11.5" text-anchor="middle" fill="#1b1f24">7</text><text x="178" y="363" font-size="11.5" text-anchor="middle" fill="#1b1f24">M &gt;= 64</text>
+<text x="248" y="316" font-size="11.5" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">int2_fp16_upcvt_gemm_mt</text>
+<text x="248" y="340" font-size="11.5" font-family="ui-monospace, Consolas, monospace" fill="#c77c1e">int2_int8_gemm_mt</text>
+<text x="248" y="356" font-size="10.5" fill="#c77c1e">only with INT8_PREFILL=1</text>
+<text x="610" y="325" font-size="11.5" text-anchor="middle" fill="#1b1f24">tiled GEMM</text>
+<text x="610" y="343" font-size="10.5" text-anchor="middle" fill="#6b7480">MT_M x MT_N tiles</text>
+<text x="838" y="325" font-size="11.5" font-weight="600" text-anchor="middle" fill="#a8641a">PREFILL</text>
+<text x="838" y="343" font-size="10.5" text-anchor="middle" fill="#6b7480">many tokens at once</text>
+
+<!-- two families -->
+<text x="24" y="428" font-size="14" font-weight="600" fill="#1b1f24">The two GEMM families read the SAME packed weights, but move the work around</text>
+
+<rect x="24" y="442" width="468" height="120" rx="6" fill="#e4f1ef" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="40" y="464" font-size="12.5" font-weight="600" fill="#2a8c82">int2 x f16 up-convert   (default, all M)</text>
+<text x="40" y="486" font-size="11.5" fill="#1b1f24">dequantize the 2-bit codes to fp16 in registers,</text>
+<text x="40" y="503" font-size="11.5" fill="#1b1f24">then fp16 DPAS, fp32 accumulate.</text>
+<text x="40" y="526" font-size="11.5" fill="#6b7480">Activations stay in their native fp16 - no extra error.</text>
+<text x="40" y="548" font-size="11.5" fill="#1b1f24">Cost: the dequantize work, every tile.</text>
+
+<rect x="508" y="442" width="468" height="120" rx="6" fill="#fdf7ee" stroke="#c77c1e" stroke-width="1.5"/>
+<text x="524" y="464" font-size="12.5" font-weight="600" fill="#a8641a">int2 x int8 DPAS   (M &gt; 8, opt-in)</text>
+<text x="524" y="486" font-size="11.5" fill="#1b1f24">weights are NEVER unpacked - raw codes feed a native</text>
+<text x="524" y="503" font-size="11.5" fill="#1b1f24">s8 x s2 DPAS, int32 accumulate.</text>
+<text x="524" y="526" font-size="11.5" fill="#1b1f24">Instead the ACTIVATIONS are quantized to int8 per</text>
+<text x="524" y="543" font-size="11.5" fill="#1b1f24">(row, 128-group). Faster, but adds a little error.</text>
+
+<text x="24" y="592" font-size="11.5" fill="#6b7480">Each primitive lazily clBuildProgram-s a kernel the first time it sees a given class, keeps it in a _launch[8] array, and reuses it after.</text>
+<text x="24" y="609" font-size="11.5" fill="#6b7480">So a single matmul node accumulates a handful of kernels over the process lifetime and picks among them by the runtime token count.</text>
+</svg>

@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 660" width="1000" height="660" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="660" fill="#ffffff"/>
+<defs><marker id="a4" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#8a93a0"/></marker></defs>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">Fix 2 - the joint q/k view in GatedDeltaNet</text>
+<text x="24" y="56" font-size="13" fill="#6b7480">Symptom: "The number of value heads must be a multiple of query/key heads (GQA), but got v_H=48 and qk_H=96"</text>
+
+<!-- ggml graph -->
+<text x="24" y="92" font-size="14" font-weight="600" fill="#1b1f24">What dense qwen35 builds in ggml</text>
+<rect x="24" y="104" width="420" height="188" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+
+<rect x="40" y="118" width="388" height="30" rx="4" fill="#ffffff" stroke="#8a93a0"/>
+<text x="234" y="137" font-size="11.5" text-anchor="middle" fill="#1b1f24">conv output + SiLU   [10240, T]</text>
+<path d="M 234 148 L 234 162" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a4)"/>
+
+<rect x="40" y="166" width="388" height="30" rx="4" fill="#ffffff" stroke="#8a93a0"/>
+<text x="234" y="185" font-size="11.5" text-anchor="middle" fill="#1b1f24">VIEW  q and k together   [128, 32, T]</text>
+<path d="M 234 196 L 234 210" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a4)"/>
+
+<rect x="40" y="214" width="388" height="30" rx="4" fill="#fdf0dc" stroke="#c77c1e" stroke-width="1.5"/>
+<text x="234" y="233" font-size="11.5" font-weight="600" text-anchor="middle" fill="#1b1f24">L2_NORM over BOTH at once   [128, 32, T]</text>
+
+<path d="M 150 244 L 110 262" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a4)"/>
+<path d="M 320 244 L 360 262" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a4)"/>
+
+<rect x="40" y="262" width="150" height="26" rx="4" fill="#e4f1ef" stroke="#2a8c82"/>
+<text x="115" y="279" font-size="11" text-anchor="middle" fill="#1b1f24">VIEW q: heads 0..15</text>
+<rect x="278" y="262" width="150" height="26" rx="4" fill="#e4f1ef" stroke="#2a8c82"/>
+<text x="353" y="279" font-size="11" text-anchor="middle" fill="#1b1f24">VIEW k: heads 16..31</text>
+
+<text x="24" y="314" font-size="11.5" fill="#6b7480">One norm over both halves is cheaper than two. qwen35moe</text>
+<text x="24" y="331" font-size="11.5" fill="#6b7480">(Qwen3.5 / 3.6 35B-A3B) normalizes q and k separately, which</text>
+<text x="24" y="348" font-size="11.5" fill="#6b7480">is why this case had never been exercised.</text>
+
+<!-- the rule -->
+<rect x="468" y="104" width="508" height="188" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="484" y="126" font-size="13" font-weight="600" fill="#2f6fb3">The backend's rule for VIEW</text>
+<text x="484" y="150" font-size="12" fill="#1b1f24">On the dynamic (GPU) path, translating a VIEW is a</text>
+<text x="484" y="167" font-size="12" fill="#1b1f24"><tspan font-weight="600">no-op pass-through</tspan>. The contract is: "the consumer</text>
+<text x="484" y="184" font-size="12" fill="#1b1f24">re-slices". That keeps the graph small and lets the</text>
+<text x="484" y="201" font-size="12" fill="#1b1f24">consumer choose the cheapest way to read the slice.</text>
+<text x="484" y="228" font-size="12" fill="#1b1f24">The GatedDeltaNet translator honoured that contract</text>
+<text x="484" y="245" font-size="12" fill="#1b1f24">for its <tspan font-family="ui-monospace, Consolas, monospace">v</tspan> input ... and only for <tspan font-family="ui-monospace, Consolas, monospace">v</tspan>.</text>
+<text x="484" y="272" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#c0392b">q = context.get_input(0);   // full 32 heads!</text>
+
+<!-- before -->
+<text x="24" y="346" font-size="14" font-weight="600" fill="#c0392b">BEFORE - q and k arrive at the joint width, then GQA tiling doubles the mistake</text>
+<rect x="24" y="358" width="952" height="104" rx="6" fill="#fdecea" stroke="#c0392b" stroke-width="1.5"/>
+
+<rect x="40" y="374" width="150" height="34" rx="4" fill="#ffffff" stroke="#c0392b"/>
+<text x="115" y="388" font-size="11" text-anchor="middle" fill="#1b1f24">q from VIEW</text>
+<text x="115" y="402" font-size="11" font-weight="600" text-anchor="middle" fill="#c0392b">32 heads (wrong)</text>
+<path d="M 194 391 L 224 391" stroke="#8a93a0" stroke-width="2" marker-end="url(#a4)"/>
+
+<rect x="228" y="374" width="200" height="34" rx="4" fill="#ffffff" stroke="#8a93a0"/>
+<text x="328" y="388" font-size="11" text-anchor="middle" fill="#1b1f24">Tile by repeat = 48/16 = 3</text>
+<text x="328" y="402" font-size="11" text-anchor="middle" fill="#6b7480">repeat computed from DECLARED 16</text>
+<path d="M 432 391 L 462 391" stroke="#8a93a0" stroke-width="2" marker-end="url(#a4)"/>
+
+<rect x="466" y="374" width="150" height="34" rx="4" fill="#ffffff" stroke="#c0392b"/>
+<text x="541" y="388" font-size="11" text-anchor="middle" fill="#1b1f24">32 x 3 =</text>
+<text x="541" y="402" font-size="11" font-weight="600" text-anchor="middle" fill="#c0392b">96 heads</text>
+<path d="M 620 391 L 650 391" stroke="#8a93a0" stroke-width="2" marker-end="url(#a4)"/>
+
+<rect x="654" y="374" width="306" height="34" rx="4" fill="#fdecea" stroke="#c0392b" stroke-width="1.5"/>
+<text x="807" y="388" font-size="11" text-anchor="middle" fill="#c0392b">GatedDeltaNet rejects it: v has 48 heads,</text>
+<text x="807" y="402" font-size="11" text-anchor="middle" fill="#c0392b">48 % 96 != 0</text>
+
+<text x="40" y="432" font-size="11.5" fill="#1b1f24">Note the trap: the DECLARED shape (from ggml metadata) said 16 heads, so the repeat factor was right. The ACTUAL tensor was 32.</text>
+<text x="40" y="450" font-size="11.5" fill="#1b1f24">Reading only the declared shape makes the bug invisible - you have to compare declared against actual.</text>
+
+<!-- after -->
+<text x="24" y="498" font-size="14" font-weight="600" fill="#2d8a4e">AFTER - re-slice on the head axis first, exactly like v already was</text>
+<rect x="24" y="510" width="952" height="92" rx="6" fill="#eaf5ee" stroke="#2d8a4e" stroke-width="1.5"/>
+
+<rect x="40" y="526" width="150" height="34" rx="4" fill="#ffffff" stroke="#8a93a0"/>
+<text x="115" y="540" font-size="11" text-anchor="middle" fill="#1b1f24">q from VIEW</text>
+<text x="115" y="554" font-size="11" text-anchor="middle" fill="#6b7480">32 heads</text>
+<path d="M 194 543 L 224 543" stroke="#8a93a0" stroke-width="2" marker-end="url(#a4)"/>
+
+<rect x="228" y="526" width="230" height="34" rx="4" fill="#ffffff" stroke="#2d8a4e" stroke-width="1.5"/>
+<text x="343" y="540" font-size="11" font-weight="600" text-anchor="middle" fill="#2d8a4e">NEW: Slice on axis 2</text>
+<text x="343" y="554" font-size="10.5" text-anchor="middle" fill="#1b1f24">begin = view_offset / per-head stride</text>
+<path d="M 462 543 L 492 543" stroke="#8a93a0" stroke-width="2" marker-end="url(#a4)"/>
+
+<rect x="496" y="526" width="120" height="34" rx="4" fill="#ffffff" stroke="#2d8a4e"/>
+<text x="556" y="547" font-size="11" font-weight="600" text-anchor="middle" fill="#2d8a4e">16 heads</text>
+<path d="M 620 543 L 650 543" stroke="#8a93a0" stroke-width="2" marker-end="url(#a4)"/>
+
+<rect x="654" y="526" width="120" height="34" rx="4" fill="#ffffff" stroke="#8a93a0"/>
+<text x="714" y="547" font-size="11" text-anchor="middle" fill="#1b1f24">Tile x3 -&gt; 48</text>
+<path d="M 778 543 L 808 543" stroke="#8a93a0" stroke-width="2" marker-end="url(#a4)"/>
+
+<rect x="812" y="526" width="148" height="34" rx="4" fill="#eaf5ee" stroke="#2d8a4e" stroke-width="1.5"/>
+<text x="886" y="547" font-size="11" font-weight="600" text-anchor="middle" fill="#2d8a4e">48 == 48, accepted</text>
+
+<text x="40" y="582" font-size="11.5" fill="#1b1f24">The helper is a no-op whenever declared width == actual width, so models that normalize q and k separately are untouched.</text>
+
+<text x="24" y="634" font-size="11" fill="#6b7480">File: ggml/src/ggml-openvino/openvino/op/gated_delta_net.cpp - function slice_joint_head_view()</text>
+</svg>

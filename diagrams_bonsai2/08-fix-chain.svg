@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700" width="1000" height="700" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="700" fill="#ffffff"/>
+<defs><marker id="a6" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker></defs>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">The one debugging lesson worth keeping</text>
+<text x="24" y="56" font-size="13" fill="#6b7480">The reshape bug (fix 3) did not just break shapes. Four steps later it surfaced as a completely unrelated-looking error.</text>
+
+<!-- chain -->
+<rect x="90" y="80" width="520" height="52" rx="6" fill="#fdf0dc" stroke="#c77c1e" stroke-width="2"/>
+<text x="350" y="101" font-size="13" font-weight="600" text-anchor="middle" fill="#a8641a">ROOT CAUSE - the reshape target was a constant</text>
+<text x="350" y="120" font-size="11.5" font-family="ui-monospace, Consolas, monospace" text-anchor="middle" fill="#1b1f24">[1, 1, 10, 1024]  instead of  [1, 1, -1, 1024]</text>
+<path d="M 350 132 L 350 154" stroke="#c0392b" stroke-width="2" marker-end="url(#a6)"/>
+
+<rect x="90" y="158" width="520" height="46" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="350" y="178" font-size="12.5" text-anchor="middle" fill="#1b1f24">a constant shape propagates forward</text>
+<text x="350" y="196" font-size="11.5" text-anchor="middle" fill="#6b7480">the FFN matmul's input partial shape becomes fully STATIC</text>
+<path d="M 350 204 L 350 226" stroke="#c0392b" stroke-width="2" marker-end="url(#a6)"/>
+
+<rect x="90" y="230" width="520" height="56" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="350" y="250" font-size="12.5" text-anchor="middle" fill="#1b1f24">FullyConnectedHorizontalFusion bails out</text>
+<text x="350" y="268" font-size="11.5" font-family="ui-monospace, Consolas, monospace" text-anchor="middle" fill="#c0392b">if (!fc-&gt;get_input_partial_shape(0).is_dynamic()) return false;</text>
+<text x="350" y="282" font-size="11" text-anchor="middle" fill="#6b7480">the pass only targets dynamic generative models</text>
+<path d="M 350 286 L 350 308" stroke="#c0392b" stroke-width="2" marker-end="url(#a6)"/>
+
+<rect x="90" y="312" width="520" height="46" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="350" y="332" font-size="12.5" text-anchor="middle" fill="#1b1f24">ffn_gate and ffn_up are NOT merged into one matmul</text>
+<text x="350" y="350" font-size="11.5" text-anchor="middle" fill="#6b7480">so ffn_gate stays a separate node with its own fused chain</text>
+<path d="M 350 358 L 350 380" stroke="#c0392b" stroke-width="2" marker-end="url(#a6)"/>
+
+<rect x="90" y="384" width="520" height="64" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="350" y="404" font-size="12.5" text-anchor="middle" fill="#1b1f24">ffn_gate ends up with THREE fused eltwise ops</text>
+<text x="350" y="422" font-size="11.5" text-anchor="middle" fill="#1b1f24">swish  +  multiply by up  +  multiply by the next layer's Hadamard signs</text>
+<text x="350" y="440" font-size="11" text-anchor="middle" fill="#6b7480">the kernel's epilogue table only knows chains of length 1 or 2</text>
+<path d="M 350 448 L 350 470" stroke="#c0392b" stroke-width="2" marker-end="url(#a6)"/>
+
+<rect x="90" y="474" width="520" height="46" rx="6" fill="#fdecea" stroke="#c0392b" stroke-width="1.5"/>
+<text x="350" y="494" font-size="12.5" text-anchor="middle" fill="#c0392b">ternocl_int2 rejects the node: "fused chain has no folded epilogue"</text>
+<text x="350" y="512" font-size="11.5" text-anchor="middle" fill="#6b7480">normally a reject is harmless - another implementation takes over</text>
+<path d="M 350 520 L 350 542" stroke="#c0392b" stroke-width="2" marker-end="url(#a6)"/>
+
+<rect x="90" y="546" width="520" height="64" rx="6" fill="#fdecea" stroke="#c0392b" stroke-width="2"/>
+<text x="350" y="566" font-size="13" font-weight="600" text-anchor="middle" fill="#c0392b">THE ERROR YOU ACTUALLY SEE</text>
+<text x="350" y="586" font-size="11" font-family="ui-monospace, Consolas, monospace" text-anchor="middle" fill="#1b1f24">"carries a Hadamard input transform but the TernOCL impl</text>
+<text x="350" y="601" font-size="11" font-family="ui-monospace, Consolas, monospace" text-anchor="middle" fill="#1b1f24">rejected it: fused chain has no folded epilogue"</text>
+
+<!-- side note -->
+<rect x="636" y="474" width="340" height="136" rx="6" fill="#fdf7ee" stroke="#c77c1e" stroke-width="1.5"/>
+<text x="652" y="496" font-size="12.5" font-weight="600" fill="#a8641a">Why it becomes fatal, not a fallback</text>
+<text x="652" y="518" font-size="11.5" fill="#1b1f24">This matmul had its Hadamard rotation folded in</text>
+<text x="652" y="535" font-size="11.5" fill="#1b1f24">(diagram 04). TernOCL is the only implementation</text>
+<text x="652" y="552" font-size="11.5" fill="#1b1f24">that applies that rotation. Falling back to oneDNN</text>
+<text x="652" y="569" font-size="11.5" fill="#1b1f24">would silently skip it and produce garbage, so the</text>
+<text x="652" y="586" font-size="11.5" fill="#1b1f24">plugin escalates the reject to a build failure.</text>
+<text x="652" y="603" font-size="11.5" font-weight="600" fill="#2d8a4e">Loud failure instead of silent wrong answers.</text>
+
+<!-- lesson -->
+<rect x="636" y="158" width="340" height="286" rx="6" fill="#eaf5ee" stroke="#2d8a4e" stroke-width="2"/>
+<text x="652" y="182" font-size="13" font-weight="600" fill="#2d8a4e">The lesson</text>
+<text x="652" y="206" font-size="12" fill="#1b1f24">The error names the <tspan font-weight="600">epilogue</tspan> and the</text>
+<text x="652" y="223" font-size="12" fill="#1b1f24"><tspan font-weight="600">Hadamard transform</tspan>. Neither is broken.</text>
+<text x="652" y="248" font-size="12" fill="#1b1f24">Chasing it directly leads you into the kernel's</text>
+<text x="652" y="265" font-size="12" fill="#1b1f24">acceptance rules, five steps away from the bug.</text>
+<text x="652" y="296" font-size="12" font-weight="600" fill="#2d8a4e">Rule of thumb:</text>
+<text x="652" y="316" font-size="12" fill="#1b1f24">when a GPU-plugin fusion "mysteriously" does</text>
+<text x="652" y="333" font-size="12" fill="#1b1f24">not fire, check whether the shapes are still</text>
+<text x="652" y="350" font-size="12" fill="#1b1f24">dynamic BEFORE looking at the pattern matcher.</text>
+<text x="652" y="378" font-size="12" fill="#1b1f24">Many passes silently require dynamic shapes,</text>
+<text x="652" y="395" font-size="12" fill="#1b1f24">because they only target generative models.</text>
+<text x="652" y="422" font-size="11.5" fill="#6b7480">Fixing the reshape made the merge fire and this</text>
+<text x="652" y="438" font-size="11.5" fill="#6b7480">entire cascade disappear at once.</text>
+
+<text x="24" y="652" font-size="11.5" fill="#1b1f24">Evidence that the merge was the missing piece: after fix 3, OV_TERNOCL_INT2_DEBUG=1 reports the accepted nodes as</text>
+<text x="24" y="670" font-size="11.5" font-family="ui-monospace, Consolas, monospace" fill="#2d8a4e">ffn_gate_fused_2FCs      z_fused_2FCs      Qcur_full_fused_3FCs</text>
+<text x="24" y="688" font-size="11.5" fill="#6b7480">- the "_fused_NFCs" suffix is the horizontal fusion naming its merged result.</text>
+</svg>

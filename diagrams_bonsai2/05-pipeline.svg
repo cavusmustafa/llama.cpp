@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 760" width="1000" height="760" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="760" fill="#ffffff"/>
+<defs><marker id="a3" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#8a93a0"/></marker></defs>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">End to end - from the GGUF file to the ternary GPU kernel</text>
+<text x="24" y="56" font-size="13" fill="#6b7480">Orange badges mark the four places that had to change. Everything else already existed.</text>
+
+<!-- stage 1 -->
+<rect x="24" y="76" width="640" height="62" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="40" y="98" font-size="13" font-weight="600" fill="#1b1f24">1.  llama.cpp loads the GGUF</text>
+<text x="40" y="118" font-size="11.5" fill="#1b1f24">Reads PQ2_0 tensors, builds H_1024 and the sign vectors from prism.hadamard.* metadata,</text>
+<text x="40" y="133" font-size="11.5" fill="#1b1f24">and records which weights are rotated.</text>
+<text x="676" y="104" font-size="11.5" fill="#6b7480">PrismML fork only -</text>
+<text x="676" y="120" font-size="11.5" fill="#6b7480">stock llama.cpp rejects</text>
+<text x="676" y="136" font-size="11.5" fill="#6b7480">the type name.</text>
+<path d="M 344 138 L 344 160" stroke="#8a93a0" stroke-width="2" marker-end="url(#a3)"/>
+
+<!-- stage 2 -->
+<rect x="24" y="164" width="640" height="62" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="40" y="186" font-size="13" font-weight="600" fill="#1b1f24">2.  llama.cpp builds the ggml compute graph</text>
+<text x="40" y="206" font-size="11.5" fill="#1b1f24">Ordinary ggml ops: MUL_MAT, RESHAPE, VIEW, L2_NORM, GATED_DELTA_NET, GLU, ...</text>
+<text x="40" y="221" font-size="11.5" fill="#1b1f24">The Hadamard chain appears as plain MUL + RESHAPE + MUL_MAT + RESHAPE.</text>
+<path d="M 344 226 L 344 248" stroke="#8a93a0" stroke-width="2" marker-end="url(#a3)"/>
+
+<!-- stage 3 -->
+<rect x="24" y="252" width="640" height="150" rx="6" fill="#e4f1ef" stroke="#2a8c82" stroke-width="2"/>
+<text x="40" y="274" font-size="13" font-weight="600" fill="#2a8c82">3.  ggml-openvino translates that graph into an OpenVINO model</text>
+<text x="40" y="296" font-size="11.5" fill="#1b1f24">Each ggml op has a translator. Weights become Constants with a decompression chain.</text>
+
+<rect x="40" y="306" width="290" height="40" rx="4" fill="#ffffff" stroke="#c77c1e" stroke-width="1.5"/>
+<text x="54" y="322" font-size="11" font-weight="600" fill="#a8641a">FIX 1  PQ2_0 -&gt; u2 Constant</text>
+<text x="54" y="338" font-size="10.5" fill="#1b1f24">ggml-quants.cpp, extra.{h,cpp}, decoder, openvino.cpp</text>
+
+<rect x="344" y="306" width="306" height="40" rx="4" fill="#ffffff" stroke="#c77c1e" stroke-width="1.5"/>
+<text x="358" y="322" font-size="11" font-weight="600" fill="#a8641a">FIX 4  do not requantize ternary</text>
+<text x="358" y="338" font-size="10.5" fill="#1b1f24">ggml-openvino-extra.cpp</text>
+
+<rect x="40" y="350" width="290" height="40" rx="4" fill="#ffffff" stroke="#c77c1e" stroke-width="1.5"/>
+<text x="54" y="366" font-size="11" font-weight="600" fill="#a8641a">FIX 2  re-slice joint q/k view</text>
+<text x="54" y="382" font-size="10.5" fill="#1b1f24">openvino/op/gated_delta_net.cpp</text>
+
+<rect x="344" y="350" width="306" height="40" rx="4" fill="#ffffff" stroke="#c77c1e" stroke-width="1.5"/>
+<text x="358" y="366" font-size="11" font-weight="600" fill="#a8641a">FIX 3  keep token axis dynamic in RESHAPE</text>
+<text x="358" y="382" font-size="10.5" fill="#1b1f24">openvino/op/reshape.cpp, ggml-decoder.cpp</text>
+
+<path d="M 344 402 L 344 424" stroke="#8a93a0" stroke-width="2" marker-end="url(#a3)"/>
+
+<!-- stage 4 -->
+<rect x="24" y="428" width="640" height="172" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="2"/>
+<text x="40" y="450" font-size="13" font-weight="600" fill="#2f6fb3">4.  OpenVINO GPU plugin compiles the model</text>
+<text x="40" y="470" font-size="11.5" fill="#1b1f24">A chain of graph passes runs, in this order - the order matters:</text>
+
+<rect x="40" y="480" width="610" height="26" rx="4" fill="#ffffff" stroke="#8a93a0"/>
+<text x="52" y="497" font-size="11" fill="#1b1f24">ConvertMatMulToFullyConnected  -&gt;  ConvertFullyConnectedToFullyConnectedCompressed</text>
+<rect x="40" y="510" width="610" height="26" rx="4" fill="#ffffff" stroke="#8a93a0"/>
+<text x="52" y="527" font-size="11" fill="#1b1f24">FullyConnectedHorizontalFusion   -  merges ffn_gate + ffn_up into ONE matmul  (needs a dynamic input shape)</text>
+<rect x="40" y="540" width="610" height="26" rx="4" fill="#ffffff" stroke="#8a93a0"/>
+<text x="52" y="557" font-size="11" fill="#1b1f24">FuseHadamardIntoFC               -  folds the rotation onto the matmul (diagram 04)</text>
+<rect x="40" y="570" width="610" height="24" rx="4" fill="#ffffff" stroke="#8a93a0"/>
+<text x="52" y="586" font-size="11" fill="#1b1f24">pick an implementation per matmul  -  ternocl_int2 is offered first, ahead of oneDNN and stock OpenCL</text>
+
+<path d="M 344 600 L 344 622" stroke="#8a93a0" stroke-width="2" marker-end="url(#a3)"/>
+
+<!-- stage 5 -->
+<rect x="24" y="626" width="640" height="112" rx="6" fill="#fdf7ee" stroke="#c77c1e" stroke-width="2"/>
+<text x="40" y="648" font-size="13" font-weight="600" fill="#a8641a">5.  The TernOCL kernel runs (added by OpenVINO PR #38460)</text>
+<text x="40" y="668" font-size="11.5" fill="#1b1f24">Accepts a matmul only if: constant u2 weights [N,K], K % 128 == 0, N % 16 == 0, f16 activations,</text>
+<text x="40" y="685" font-size="11.5" fill="#1b1f24">unpadded row-major, and a fused epilogue it knows (SwiGLU, residual add, bias, sigmoid, or none).</text>
+<text x="40" y="707" font-size="11.5" fill="#1b1f24">Repacks the weights once at compile time, then picks a kernel per call from the token count (diagram 09).</text>
+<text x="40" y="727" font-size="11.5" fill="#2d8a4e">Without this kernel the same model runs at 1.4 t/s instead of 527 t/s prefill.</text>
+
+<!-- right column: who owns what -->
+<text x="690" y="276" font-size="13" font-weight="600" fill="#1b1f24">Who owns which piece</text>
+<rect x="690" y="290" width="286" height="46" rx="5" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="704" y="308" font-size="11.5" font-weight="600" fill="#1b1f24">PrismML-Eng/llama.cpp</text>
+<text x="704" y="325" font-size="11" fill="#6b7480">PQ2_0 type, Hadamard runtime, qwen35</text>
+
+<rect x="690" y="344" width="286" height="46" rx="5" fill="#e4f1ef" stroke="#2a8c82"/>
+<text x="704" y="362" font-size="11.5" font-weight="600" fill="#2a8c82">ggml-openvino (our 4 fixes)</text>
+<text x="704" y="379" font-size="11" fill="#6b7480">161 lines across 7 files</text>
+
+<rect x="690" y="398" width="286" height="46" rx="5" fill="#dce9f5" stroke="#2f6fb3"/>
+<text x="704" y="416" font-size="11.5" font-weight="600" fill="#2f6fb3">OpenVINO GPU plugin</text>
+<text x="704" y="433" font-size="11" fill="#6b7480">graph passes, impl selection</text>
+
+<rect x="690" y="452" width="286" height="46" rx="5" fill="#fdf7ee" stroke="#c77c1e"/>
+<text x="704" y="470" font-size="11.5" font-weight="600" fill="#a8641a">OpenVINO PR #38460 + TernOCL</text>
+<text x="704" y="487" font-size="11" fill="#6b7480">the 2-bit OpenCL kernels</text>
+
+<rect x="690" y="516" width="286" height="84" rx="5" fill="#fdecea" stroke="#c0392b"/>
+<text x="704" y="536" font-size="11.5" font-weight="600" fill="#c0392b">All four pieces are needed</text>
+<text x="704" y="555" font-size="11" fill="#1b1f24">Miss the fork  -&gt; file will not load</text>
+<text x="704" y="572" font-size="11" fill="#1b1f24">Miss the fixes -&gt; crash or wrong output</text>
+<text x="704" y="589" font-size="11" fill="#1b1f24">Miss the PR    -&gt; 167x slower</text>
+</svg>
