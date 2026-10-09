@@ -141,7 +141,6 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_NATIVE_SOFTPLUS",
         "GGML_OPENVINO_DISABLE_REMOTE_OUTPUTS",
         "GGML_OPENVINO_REQUANT_KQUANT",
-        "GGML_OPENVINO_REQUANT_EMBD",
         "GGML_OPENVINO_DISABLE_KV_STATE_RELAYOUT",
         "GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK",
         // Build the precise (but O(n_nodes)) graph cache key. Needed by op tests.
@@ -366,13 +365,6 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
     // requant target here is 4 bit or wider, so it would inflate them and also lose the ternary
     // FullyConnected path, which is the only one that applies a fused Hadamard input transform.
     if (tensor->type == GGML_TYPE_PQ2_0) {
-        return std::nullopt;
-    }
-    // GGML_OPENVINO_REQUANT_EMBD=native keeps token_embd/output in the file's quantization (tied models: also the lm_head)
-    const bool is_embd_or_output =
-        strncmp(tensor->name, "token_embd.weight", 17) == 0 || strncmp(tensor->name, "output.weight", 13) == 0;
-    const char * rq_embd = ggml_openvino_getenv_str("GGML_OPENVINO_REQUANT_EMBD");
-    if (is_embd_or_output && rq_embd && strcmp(rq_embd, "native") == 0 && !ggml_openvino_is_npu()) {
         return std::nullopt;
     }
     if (strncmp(tensor->name, "token_embd.weight", 17) == 0) {
