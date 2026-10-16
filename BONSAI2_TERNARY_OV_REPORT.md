@@ -85,14 +85,26 @@ BF16 rather than ternary; they correctly fall through to the stock path. Every u
 
 `llama-bench -r 3 -ngl 99`, same GPU, same model file. t/s.
 
+All decode numbers measured with `-n <N> -r 5` **on their own** and all prefill with
+`-p 128,512 -r 3`; see the measurement note at the end of this section for why that matters.
+
 | configuration | pp128 | pp512 | tg32 | tg128 |
 |---|---:|---:|---:|---:|
-| **native OpenVINO** (`paged_bench_llm_27b`) | 241.2 | **638.5** | **14.9** | **15.03** |
+| **native OpenVINO** (`paged_bench_llm_27b`) | 241.2 | **638.5** | **14.90** | **15.03** |
 | **native OpenVINO**, `INT8_PREFILL=1` | **616.3** | **693.4** | - | - |
-| **ggml-openvino** + TernOCL (default) | 233.9 | 527.4 | 12.25 | 11.28 |
-| **ggml-openvino** + TernOCL, `INT8_PREFILL=1` | 530.2 | 571.1 | 11.64 | - |
-| **ggml-vulkan** | 161.0 | 165.4 | 12.32 | 12.31 |
+| **ggml-openvino**, final (this work) | 236.1 | 535.1 | 13.45 | 13.46 |
+| **ggml-openvino**, final + `INT8_PREFILL=1` | 549.0 | 579.7 | - | - |
+| ggml-openvino before this work | 232.2 | 527.3 | 12.27 | 12.24 |
+| **ggml-vulkan** | 171.2 | 169.5 | 12.70 | 12.70 |
 | ggml-openvino, `TERNOCL_DISABLE=1` | 1.4 | - | 1.24 | - |
+
+Native OpenVINO ÷ ggml-openvino: pp128 **1.02x**, pp512 **1.19x**, tg **1.11-1.12x** (with int8
+prefill on both sides: 1.12x / 1.20x). ggml-openvino ÷ vulkan: pp512 **3.16x** (3.42x with int8
+prefill), tg **1.06x**.
+
+The "native OpenVINO" rows are `paged_bench_llm_27b`, the PR's own PagedAttention tool - the
+honest native ceiling for this model. They are **not** `openvino_genai.LLMPipeline`, which was
+never run here.
 
 Two results only:
 | configuration | pp128 | pp512 | tg32 | tg128 |
