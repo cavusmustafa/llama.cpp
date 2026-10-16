@@ -87,10 +87,28 @@ BF16 rather than ternary; they correctly fall through to the stock path. Every u
 
 | configuration | pp128 | pp512 | tg32 | tg128 |
 |---|---:|---:|---:|---:|
+| **native OpenVINO** (`paged_bench_llm_27b`) | 241.2 | **638.5** | **14.9** | **15.03** |
+| **native OpenVINO**, `INT8_PREFILL=1` | **616.3** | **693.4** | - | - |
 | **ggml-openvino** + TernOCL (default) | 233.9 | 527.4 | 12.25 | 11.28 |
-| **ggml-openvino** + TernOCL, `INT8_PREFILL=1` | **530.2** | **571.1** | 11.64 | - |
-| **ggml-vulkan** | 161.0 | 165.4 | **12.32** | **12.31** |
+| **ggml-openvino** + TernOCL, `INT8_PREFILL=1` | 530.2 | 571.1 | 11.64 | - |
+| **ggml-vulkan** | 161.0 | 165.4 | 12.32 | 12.31 |
 | ggml-openvino, `TERNOCL_DISABLE=1` | 1.4 | - | 1.24 | - |
+
+Two results only:
+| configuration | pp128 | pp512 | tg32 | tg128 |
+|---|---:|---:|---:|---:|
+| **ggml-openvino** + TernOCL | 233.9 | 527.4 | 12.25 | 11.28 |
+| **ggml-vulkan** | 161.0 | 165.4 | **12.32** | **12.31** |
+
+The native-OpenVINO row is the PR's own tool (`paged_bench_llm_27b`, PagedAttention) on the u2 IR
+built per `ternocl_int2_bonsai2_from_scratch.md`, same GPU and same weights. It is the ceiling the
+ggml-openvino integration is measured against. Its 21-token-prompt reference run reproduces the
+doc's published `generated_ids` exactly, which is also the end-to-end check that the GGUF -> IR
+weight mapping is correct.
+
+Caveat on comparability: `paged_bench_llm_27b` reports TTFT for one prompt, so prefill t/s here is
+`prompt_tokens / TTFT` at a synthetic prompt of that length, not llama-bench's `pp` loop. Decode is
+a genuine N-token greedy generation and is flat (14.9 / 15.03 / 15.0 at tg32 / tg128 / tg256).
 
 ### Prefill
 
@@ -101,12 +119,220 @@ prefill kernel (571). Vulkan is essentially flat from pp128 to pp512 (161 -> 165
 `OV_TERNOCL_INT2_INT8_PREFILL=1` is off by default in the PR but is a large win here, 2.3x at
 pp128, and was bit-identical on this model.
 
+Against the native-OpenVINO ceiling, ggml-openvino prefill is already close: 1.03x at pp128 (234 vs
+241) and 1.21x at pp512 (527 vs 638). With `INT8_PREFILL=1` the ratio is 1.16x / 1.21x (530/571 vs
+616/693). So unlike the dense and MoE models previously measured, there is no large prefill
+integration gap to recover on this architecture - the remaining headroom is mostly in decode.
+
 ### Decode
 
-A tie, and both backends are **memory-bandwidth-bound, not kernel-bound**: 6.70 GiB x ~12 t/s is
-about 80 GB/s, which is roughly all this iGPU can sustain. There is no headroom to win here, and
-decode on this model cannot distinguish the two backends on this hardware. A discrete part is
-needed to say anything useful about decode.
+ggml-openvino and Vulkan tie at ~12 t/s. **Native OpenVINO does not** - it sustains 15.0 t/s on
+the same iGPU and the same weights, **1.22x** ggml-openvino's clean 12.25.
+
+This **corrects the earlier conclusion** that ~80 GB/s was "roughly all this iGPU can sustain" and
+that there was "no headroom to win here". The measured memory system is 8 x 16-bit LPDDR5X-9600 =
+**153.6 GB/s theoretical peak**, so the numbers are:
+
+| | t/s | implied traffic | % of 153.6 GB/s peak |
+|---|---:|---:|---:|
+| native OpenVINO | 15.03 | ~103 GB/s | 67% |
+| ggml-openvino | 12.25 | ~88 GB/s | 57% |
+
+~88 GB/s was an *integration* ceiling, not a hardware one. **See §4.1 for the root cause** - the
+whole-token averages above are misleading: the ternary GEMV kernels themselves reach 106 GB/s in
+*both* backends, and the apparent deficit is entirely time spent on non-GEMV ops that move almost
+no data.
+
+A discrete part is still needed to characterise the kernels themselves, but it is no longer true
+that decode cannot distinguish the backends on this hardware - it can, and does.
+
+> **Retracted:** an earlier revision of this section claimed ggml-openvino decode *degrades with
+> depth* (12.25 at tg32 -> 11.28 at tg128) while native OV stays flat, and that the gap therefore
+> widens with context. That is **wrong** - the 11.28 came from the `pp`-before-`tg` ordering
+> artifact described in the measurement note below. Measured on its own, ggml-openvino decode is
+> flat (12.27 / 12.24), exactly like native OV. There is no depth-degradation effect here.
+
+### 4.1 Root cause of the decode gap: non-GEMV graph overhead, not bandwidth or dispatch
+
+Measured, not inferred. Two independent instruments:
+
+**GPU occupancy (xe PMU, `gpu_busy.py`** - `perf` is not built for this kernel, so the counters are
+read through `perf_event_open`; validated at 0% idle / 96.4% during prefill):
+
+| | compute/CCS busy | copy/BCS busy | t/s |
+|---|---:|---:|---:|
+| ggml-openvino decode | **99.99%** | 14.1% | 12.8 |
+| native OpenVINO decode | **99.95%** | 12.5% | 14.9 |
+
+Both saturate the GPU. So the gap is **not** host dispatch, not kernel-launch gaps, and not GPU
+idle - which **rules out** the `update_implementation`-style dispatch bottleneck found on gemma-4
+MoE. ggml-openvino simply asks the GPU to do more work per token.
+
+**Per-op breakdown** (`GGML_OPENVINO_PROFILING=2`, steady-state decode, 2718 executed ops):
+
+| op | ms/token | share | count |
+|---|---:|---:|---:|
+| `FullyConnectedCompressed` (TernOCL ternary GEMV) | 64.72 | 84.4% | 257 |
+| `Transpose` | 2.80 | 3.7% | 273 |
+| `Convert` (mostly `reorder_data_fast_b1__f32`) | 2.52 | 3.3% | 275 |
+| `GatedDeltaNet` | 1.87 | 2.4% | 48 |
+| `Result` (`cache_s_l*` state writeback) | 1.06 | 1.4% | 96 |
+| `FullyConnected` (the BF16 `ssm_alpha`/`ssm_beta`) | 0.90 | 1.2% | 97 |
+| `RMS` | 0.70 | 0.9% | 209 |
+| `StridedSlice` | 0.39 | 0.5% | 336 |
+| rest (`Concat`, `SDPA`, `Add`, `Reorder`, ...) | ~1.0 | 1.3% | - |
+| **total** | **76.70** | | |
+
+The decomposition closes exactly:
+
+```
+ggml-openvino   64.72 ms GEMV + 11.98 ms other = 76.70 ms  (13.0 t/s)
+native OV                                        67.19 ms  (14.9 t/s, measured)
+gap 9.51 ms   <->   non-GEMV overhead 11.98 vs an implied ~2.47 ms for native
+```
+
+**The ternary GEMVs are not the problem.** 6.86 GB of weights in 64.72 ms is **106 GB/s**, 69% of
+the 153.6 GB/s peak, and both backends run the *same* TernOCL kernels over the *same* u2 weights,
+so that term is identical on both sides. The entire 1.17x is the ~9.5 ms/token of graph scaffolding
+that the hand-built native graph does not have.
+
+#### The single biggest item: the GDN recurrent-state round-trip
+
+Breaking the overhead down by *cause* rather than by op type makes one mechanism dominant. Three
+different op types all appear exactly **96 = 48 GDN layers x 2 (state in + state out)** times:
+
+| per-token cost | op | n | ms |
+|---|---|---:|---:|
+| state layout swap `{0,1,3,2}` | `Transpose` / `permute_xy_swap__f16` | 96 | 1.73 |
+| state dtype conversion to f32 | `Convert` / `reorder_data_fast_b1__f32` | 96 | 2.43 |
+| state writeback | `Result` (`cache_s_l*`) | 96 | 1.06 |
+| | | | **5.22** |
+
+That is **44% of all non-GEMV overhead and 6.8% of decode**, spent entirely on shipping the GDN
+recurrent state across the graph boundary and back every single token. The state is
+`[1, 48, 128, 128]` f32 = 3.1 MB per layer, ~151 MB per token in total.
+
+Why it happens: `translate_gated_delta_net` receives the state in ggml's layout
+`[B, H_v, value_dim, key_dim]`, but the fused `GatedDeltaNet` op wants
+`[B, H_v, key_dim, value_dim]`, so it transposes on the way in (line ~181) and transposes straight
+back on the way out (line ~220). The dtype conversions are the same boundary: ggml keeps recurrent
+state in f32 while the model body runs f16.
+
+**The layout half is now fixed** (see 4.2). The dtype and writeback halves are not: `cache_s_l*` is
+a ggml-owned tensor and llama.cpp's recurrent-state module picks the f32 dtype for every backend,
+so the f16 compute boundary forces a conversion and a `Result` every token.
+
+Ceiling if it were removed: 76.70 -> ~71.5 ms = **~14.0 t/s**, closing the gap from 1.17x to
+~1.07x. The remaining `permute_ref` transposes (177 ops, 1.07 ms) and the thin tail of
+`RMS`/`StridedSlice`/`Concat`/`Add` ops are small individually and launch-bound - mean non-GEMV op
+cost is **4.9 us**, so what matters is op *count*, not op efficiency.
+
+> A first attempt to cut transposes by emitting `Reshape` when `T == 1` (a provable no-op at
+> decode, and `Reshape` is `OPTIMIZED_OUT` 1055 times per token while `Transpose` is not) was
+> written against `translate_gated_delta_net_ref` - which is **dead code**: the fallback call is
+> commented out and the fused `translate_gated_delta_net` is what runs. Op counts were byte-identical
+> before and after, confirming it. Reverted. Check which translator actually runs before editing.
+
+### 4.2 Fix landed: GDN state in the op's native layout (+3.0% decode)
+
+`openvino/op/gated_delta_net.cpp` transposed the recurrent state `{0,1,3,2}` on the way into the
+fused op and straight back out again, every layer, every token. On the split-outputs path the
+state is read from and written back to the same ggml buffer with nothing else observing it, so the
+buffer can simply hold the op's layout and both transposes drop out.
+
+OpenVINO's own GGUF frontend made exactly this change upstream (`630516e048`): it declares the
+state parameter as `{1, H_v, S, head_v}` and gates the transposes behind a `split_outputs` flag.
+We had the matching branch already (`get_output_names().size() == 2`) but still transposed in it.
+
+Guarded on the two state dims being equal - skipping the permute would otherwise also change the
+shape ggml allocated. For Bonsai 2 the state is square (128x128), so the guard passes.
+
+| | before | after |
+|---|---:|---:|
+| `permute_xy_swap` state transposes | 96 ops, 1.73 ms | **0 ops** |
+| total `Transpose` | 273 ops, 2.80 ms | 177 ops, 1.08 ms |
+| executed ops / token | 2718 | 2622 |
+| **tg32 / tg128** | 13.05 / 13.05 | **13.45 / 13.46** |
+
+Prefill unchanged (pp128 236, pp512 535). Output still correct and identical.
+
+**Safety check**: the buffer now holds the op's layout, so every graph touching it must agree.
+Instrumented every GDN translation during a `pp128 -n 32,128` run: 144/144 reported
+`split_outputs=1 square=1 native=1`, i.e. no graph takes the packed path. If a model ever mixed
+the two paths within one session the state would be misread, which is why the change is scoped to
+the split-outputs branch rather than applied unconditionally.
+
+### 4.3 Not fixed: the state dtype and writeback (the other ~3.4 ms)
+
+What remains of the state tax after 4.2:
+
+| | n | ms |
+|---|---:|---:|
+| f32 `Convert` of the ssm state (~48 us each, 3.1 MB/layer) | 48 | ~2.3 |
+| `Result` writeback (`cache_r_l*` + `cache_s_l*`) | 96 | 1.06 |
+
+These are one problem, not two: ggml owns `cache_s`/`cache_r` in **f32** while the GPU computes in
+f16, so every token crosses that boundary. The `GatedDeltaNet` op itself is not the obstacle - it
+validates each input independently against `{f32,f16,bf16}` and sets the output state type from
+the *input* state type (`src/core/src/op/gated_delta_net.cpp:103`), so an f32 state alongside f16
+q/k/v is legal. The conversion is forced by the plugin's f16 inference precision meeting ggml's
+f32 buffer.
+
+The real fix is a device-resident recurrent state (OV `Variable` / `ReadValue`+`Assign`), as
+OpenVINO's GGUF frontend does in `pass/make_stateful.cpp`. **`GGML_OPENVINO_STATEFUL_EXECUTION=1`
+does not do this** - it covers the KV cache only, leaves the recurrent state round-tripping, and
+measured *slower* than stateless here (12.8 vs 13.3 t/s). Implementing it needs a correctness
+story for llama.cpp clearing and copying state slots through the cgraph
+(`ggml-decoder.h:85`), which an OV-internal state would not observe. Worth ~+4.7% (to ~14.0 t/s).
+
+### sdpa_opt (shape-from-mask) and the opt-in 4-D stateless KV cache
+
+2026-10-16: grafted 15 further `ravi9/dev_backend_openvino` commits (`a4493f9c..287f06326`) onto the
+PrismML branch — branch `prism_ov_ternary_kv4d`. Two are the point of the exercise:
+`84232f479` (derive attention sizes from the KQ mask shape, so the GPU plugin can pick its fused
+SDPA kernel; off-switch `GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK`) and `dd042318d` + `375f0b765`
+(4-D stateless KV cache for the plugin's `StatelessKVFusion`, opt-in `GGML_OPENVINO_ENABLE_KV_4D`).
+
+`StatelessKVFusion` needs openvino#37569, which is 2026.5+. The PR #38460 build already **is**
+2026.5.0 and already contains #37569, so no toolkit change was needed — which matters, because a
+binary nightly would not carry the unmerged TernOCL kernels at all.
+
+Decode, `-n 32,128 -r 5`, each config run on its own (see the measurement note below):
+
+| configuration | tg32 | tg128 |
+|---|---:|---:|
+| pre-graft (`prism_ov_ternary`) | 12.27 | 12.24 |
+| graft, shape-from-mask **off**, KV_4D off | 12.41 | 12.35 |
+| graft, shape-from-mask on, KV_4D off (default) | 12.65 | 12.68 |
+| graft, shape-from-mask on, **KV_4D on** | **12.84** | **12.86** |
+| + `GGML_OPENVINO_DISABLE_KV_SLICE=1` | **13.06** | **13.07** |
+| `GGML_OPENVINO_STATEFUL_EXECUTION=1` (llama-cli) | - | 12.8 |
+
+So shape-from-mask is worth ~2.7% and KV_4D ~1.4%, **+5.1% together** over pre-graft. Adding
+`GGML_OPENVINO_DISABLE_KV_SLICE=1` is worth a further 1.6% with prefill unchanged, for **+6.8%**
+total (12.24 -> 13.07) and a 1.15x remaining gap. Stateful execution is worth only +2.4% on this
+model and currently **fails llama-bench's generation warmup** (`failed to decode generation batch,
+res = -3`) while working fine under llama-cli, so it is not usable for benchmarking here.
+Prefill is
+unchanged within noise (pp128 232 -> 236, pp512 527 -> 538), so neither change helps the prompt
+phase on this model — unsurprising, since prefill here is dominated by the TernOCL int2 GEMM, not
+by attention.
+
+Both paths produce correct, identical output (`The capital of France is` -> `Paris`).
+
+These are real but small. They close the gap to the native-OpenVINO ceiling from 1.22x to **1.17x**
+(15.03 vs 12.86 at tg128); most of the decode gap is still unexplained by these two optimizations.
+
+Not verified: that the plugin actually selects `sdpa_opt` rather than decomposing to gemm+softmax.
+Confirming that needs an `ENABLE_DEBUG_CAPS=ON` OpenVINO rebuild (this build has it off), so the
++2.7% is an observed effect, not a confirmed kernel switch.
+
+> **Measurement note.** `llama-bench -p 128,512 -n 32,128` runs the `pp` cells before the `tg`
+> cells and this contaminates `tg32`: in that ordering `tg32` read 11.65 while `tg128` read 12.62
+> on the same build, which is backwards. Running `-n 32,128` on its own gives a self-consistent
+> 12.65 / 12.68. **The `tg32 12.25 / tg128 11.28` figures in the table above carry this artifact**;
+> the clean pre-graft decode number is ~12.25 at both lengths, not 11.28 at tg128. Do not read a
+> depth-degradation story into the old numbers.
 
 ### The PR is required, not an optimization
 
@@ -121,7 +347,20 @@ that applies the rotation at all.
 ## 5. Reproducing
 
 ```sh
-./bench_bonsai.sh      # both backends, full matrix
+./bench_bonsai.sh      # both ggml backends, full matrix
+```
+
+The native-OpenVINO row needs the u2 IR, which is a one-time build (see
+`openvino/src/plugins/intel_gpu/docs/ternocl_int2_bonsai2_from_scratch.md`). It is already built at
+`~/llama.cpp/gemma4/ov-bonsai2/`:
+
+```sh
+cd ~/llama.cpp/gemma4/ov-bonsai2
+TOOLS=~/llama.cpp/gemma4/openvino/src/plugins/intel_gpu/tools/int2
+IDS=$(cat $TOOLS/prompt_photosynthesis_27b.txt)
+ZE_AFFINITY_MASK=0 BENCH_PRECISION=f16 BENCH_MAX_LEN=512 BENCH_NO_EOS=1 \
+  $TOOLS/build/paged_bench_llm_27b bonsai2-27b-u2/openvino_model.xml \
+  bonsai2-27b-u2/openvino_text_embeddings_model.xml GPU 128 "$IDS"
 ```
 
 Three traps that silently produce wrong numbers:
@@ -137,6 +376,9 @@ Three traps that silently produce wrong numbers:
 ## 6. Open items
 
 - Tile tables are Xe2-tuned; this GPU is Xe3, so prefill numbers are a floor, not a ceiling.
+- **The 1.22-1.33x decode gap to native OpenVINO is now the main open perf item** on this model, and
+  it is integration overhead, not kernel or bandwidth limited (see §4 Decode). It also grows with
+  context depth. Not yet decomposed into its causes.
 - `OV_TERNOCL_INT2_INT8_PREFILL` looks like it should be the default for this model, but that is the
   PR author's call and needs a GSM8K-style accuracy check, not a 90-token diff.
 - The 5 pre-existing `GATED_DELTA_NET` op failures on `dev_backend_openvino` are unrelated to this
