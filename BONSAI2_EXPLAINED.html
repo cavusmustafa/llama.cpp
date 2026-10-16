@@ -1,0 +1,1628 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Running a ternary 27B model on an Intel GPU - how it all fits together</title>
+<style>
+:root{
+  --ink:#1b1f24; --muted:#6b7480; --rule:#dfe4ea; --surface:#ffffff; --panel:#f7f9fb;
+  --accent:#2f6fb3; --code-bg:#f4f6f9; --warn-bg:#fdf6e7; --warn-bd:#c77c1e;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ink:#e6e9ee; --muted:#9aa4b2; --rule:#2b3240; --surface:#14171c; --panel:#1b1f27;
+    --accent:#6ea8e8; --code-bg:#1d2229; --warn-bg:#2a2317; --warn-bd:#c77c1e;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--surface);color:var(--ink);
+  font:16px/1.65 "Segoe UI",Helvetica,Arial,sans-serif;-webkit-text-size-adjust:100%}
+.wrap{max-width:1060px;margin:0 auto;padding:32px 24px 80px}
+h1{font-size:28px;line-height:1.25;margin:0 0 10px}
+h2{font-size:22px;margin:0 0 18px;padding-bottom:10px;border-bottom:1px solid var(--rule)}
+h3{font-size:17px;margin:30px 0 10px}
+p,li{color:var(--ink)}
+.standfirst{color:var(--muted);font-size:15px;margin:0 0 20px}
+.standfirst p{color:var(--muted);margin:.5em 0}
+a{color:var(--accent)}
+hr{border:0;border-top:1px solid var(--rule);margin:28px 0}
+code{font:13.5px/1.5 ui-monospace,Consolas,monospace;background:var(--code-bg);
+  padding:.12em .36em;border-radius:4px}
+pre{background:var(--code-bg);border:1px solid var(--rule);border-radius:8px;
+  padding:14px 16px;overflow:auto}
+pre code{background:none;padding:0}
+blockquote{margin:20px 0;padding:12px 18px;background:var(--warn-bg);
+  border-left:4px solid var(--warn-bd);border-radius:0 6px 6px 0}
+blockquote p{margin:.4em 0}
+table{border-collapse:collapse;width:100%;margin:18px 0;font-size:14.5px;display:block;overflow-x:auto}
+th,td{border:1px solid var(--rule);padding:8px 11px;text-align:left;vertical-align:top}
+th{background:var(--panel);font-weight:600}
+tbody tr:nth-child(even){background:color-mix(in srgb,var(--panel) 55%,transparent)}
+.fig{margin:22px 0;padding:0;background:#fff;border:1px solid var(--rule);
+  border-radius:8px;overflow:hidden}
+svg.diagram{display:block;width:100%;height:auto}
+.tabs{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;gap:6px;
+  padding:10px 0;margin:0 0 24px;background:var(--surface);border-bottom:1px solid var(--rule)}
+.tab{font:600 13px/1 "Segoe UI",Helvetica,Arial,sans-serif;color:var(--muted);
+  background:transparent;border:1px solid transparent;border-radius:999px;
+  padding:8px 13px;cursor:pointer}
+.tab:hover{color:var(--ink);background:var(--panel)}
+.tab[aria-selected="true"]{color:#fff;background:var(--accent);border-color:var(--accent)}
+.tab:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.panel{display:none;animation:fade .18s ease-out}
+.panel.is-active{display:block}
+@keyframes fade{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+.foot{margin-top:40px;padding-top:16px;border-top:1px solid var(--rule);
+  color:var(--muted);font-size:13px}
+@media print{
+  .tabs{display:none} .panel{display:block!important;page-break-before:always}
+  .panel:first-of-type{page-break-before:auto} body{background:#fff;color:#000}
+}
+</style>
+<body>
+<div class="wrap">
+  <h1>Running a ternary 27B model on an Intel GPU - how it all fits together</h1>
+  <div class="standfirst"><p>A walkthrough of what Bonsai 2 27B is, how its 2-bit weights are stored, why it needs a
+Hadamard rotation at run time, what had to change in llama.cpp's OpenVINO backend to make it run
+on an Intel GPU, and where its decode time actually goes.</p>
+<p>Written to be readable without prior knowledge of this codebase. Measured numbers and the terse
+engineering version are in <code>BONSAI2_TERNARY_OV_REPORT.md</code>; this file explains the <em>why</em>.</p>
+<p>Last updated 2026-10-17: sections 8 and 9 are new or rewritten.</p></div>
+  <div class="tabs" role="tablist" aria-label="Sections"><button class="tab" role="tab" id="btn-tab-0-tl-dr" aria-controls="tab-0-tl-dr" aria-selected="true" tabindex="0">TL;DR</button><button class="tab" role="tab" id="btn-tab-1-1-what-the-model-is" aria-controls="tab-1-1-what-the-model-is" aria-selected="false" tabindex="-1">1. What the model is</button><button class="tab" role="tab" id="btn-tab-2-2-how-pq2-0-stores-a-ternary-weight" aria-controls="tab-2-2-how-pq2-0-stores-a-ternary-weight" aria-selected="false" tabindex="-1">2. How PQ2_0 stores a ternary weight</button><button class="tab" role="tab" id="btn-tab-3-3-the-twist-the-weights-live-in-a-rotate" aria-controls="tab-3-3-the-twist-the-weights-live-in-a-rotate" aria-selected="false" tabindex="-1">3. The twist: the weights live in a rotated basis</button><button class="tab" role="tab" id="btn-tab-4-4-teaching-the-openvino-backend-to-read-" aria-controls="tab-4-4-teaching-the-openvino-backend-to-read-" aria-selected="false" tabindex="-1">4. Teaching the OpenVINO backend to read PQ2_0</button><button class="tab" role="tab" id="btn-tab-5-5-the-four-fixes" aria-controls="tab-5-5-the-four-fixes" aria-selected="false" tabindex="-1">5. The four fixes</button><button class="tab" role="tab" id="btn-tab-6-6-the-debugging-lesson" aria-controls="tab-6-6-the-debugging-lesson" aria-selected="false" tabindex="-1">6. The debugging lesson</button><button class="tab" role="tab" id="btn-tab-7-7-how-one-compiled-model-uses-two-differ" aria-controls="tab-7-7-how-one-compiled-model-uses-two-differ" aria-selected="false" tabindex="-1">7. How one compiled model uses two different kernels</button><button class="tab" role="tab" id="btn-tab-8-8-results" aria-controls="tab-8-8-results" aria-selected="false" tabindex="-1">8. Results</button><button class="tab" role="tab" id="btn-tab-9-9-closing-the-decode-gap" aria-controls="tab-9-9-closing-the-decode-gap" aria-selected="false" tabindex="-1">9. Closing the decode gap</button><button class="tab" role="tab" id="btn-tab-10-10-what-you-need-to-run-it" aria-controls="tab-10-10-what-you-need-to-run-it" aria-selected="false" tabindex="-1">10. What you need to run it</button></div>
+  <section class="panel is-active" role="tabpanel" id="tab-0-tl-dr" aria-labelledby="btn-tab-0-tl-dr"><h2>TL;DR</h2><table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Model</strong></td>
+<td>Bonsai 2 27B, a ternary (-1 / 0 / +1) quantization of a 27 B hybrid-attention LLM. 6.70 GiB at 2.13 bits per weight, vs ~54 GB at fp16.</td>
+</tr>
+<tr>
+<td><strong>Goal</strong></td>
+<td>Run it through llama.cpp's OpenVINO backend on an Intel GPU, using the new 2-bit OpenCL kernels from OpenVINO PR #38460, and compare against Vulkan and against native OpenVINO.</td>
+</tr>
+<tr>
+<td><strong>Work needed</strong></td>
+<td>161 lines across 7 files to make it run, then four more changes to close part of the decode gap.</td>
+</tr>
+<tr>
+<td><strong>Outcome</strong></td>
+<td>Correct output, <strong>3.16x faster prefill than Vulkan</strong> (535 vs 169 t/s), and decode improved 12.24 -&gt; 13.46 t/s, which is <strong>1.12x off</strong> the native-OpenVINO ceiling.</td>
+</tr>
+<tr>
+<td><strong>Biggest surprise</strong></td>
+<td>Without the PR's 2-bit kernels, the same model runs <strong>167x slower</strong>. The kernels are not an optimization, they are the difference between usable and unusable.</td>
+</tr>
+<tr>
+<td><strong>Correction</strong></td>
+<td>This page previously said decode was a tie limited by an ~80 GB/s bandwidth wall. Both halves were wrong - the peak is 153.6 GB/s and the limit was integration overhead. See section 9.</td>
+</tr>
+</tbody>
+</table>
+<hr /></section><section class="panel" role="tabpanel" id="tab-1-1-what-the-model-is" aria-labelledby="btn-tab-1-1-what-the-model-is" hidden><h2>1. What the model is</h2><p><figure class="fig"><svg class="diagram" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="700" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">Bonsai 2 27B - model architecture</text>
+<text x="24" y="56" font-size="13" fill="#6b7480">GGUF arch = "qwen35" (dense, no MoE). 26.9 B params, 64 layers, n_embd 5120, vocab 248320, ctx 262144.</text>
+<text x="24" y="74" font-size="13" fill="#6b7480">Hybrid: 3 out of every 4 layers use linear attention (GatedDeltaNet), the 4th uses full attention.</text>
+
+<!-- ===== left: layer stack ===== -->
+<text x="24" y="110" font-size="14" font-weight="600" fill="#1b1f24">Layer stack</text>
+
+<rect x="24" y="124" width="210" height="34" rx="5" fill="#eef2f6" stroke="#8a93a0"/>
+<text x="129" y="146" font-size="12.5" text-anchor="middle" fill="#1b1f24">token_embd  [5120, 248320]</text>
+<text x="240" y="139" font-size="11" fill="#c77c1e">ternary</text>
+<text x="240" y="152" font-size="11" fill="#c77c1e">+ inverse rotation</text>
+
+<line x1="129" y1="158" x2="129" y2="176" stroke="#8a93a0" stroke-width="1.5"/>
+
+<rect x="24" y="176" width="210" height="150" rx="6" fill="#f7f9fb" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="129" y="196" font-size="12" font-weight="600" text-anchor="middle" fill="#2f6fb3">repeating group of 4</text>
+<rect x="38" y="204" width="182" height="24" rx="4" fill="#e4f1ef" stroke="#2a8c82"/>
+<text x="129" y="220" font-size="11.5" text-anchor="middle" fill="#1b1f24">layer 0 - GatedDeltaNet</text>
+<rect x="38" y="232" width="182" height="24" rx="4" fill="#e4f1ef" stroke="#2a8c82"/>
+<text x="129" y="248" font-size="11.5" text-anchor="middle" fill="#1b1f24">layer 1 - GatedDeltaNet</text>
+<rect x="38" y="260" width="182" height="24" rx="4" fill="#e4f1ef" stroke="#2a8c82"/>
+<text x="129" y="276" font-size="11.5" text-anchor="middle" fill="#1b1f24">layer 2 - GatedDeltaNet</text>
+<rect x="38" y="288" width="182" height="24" rx="4" fill="#fdf0dc" stroke="#c77c1e"/>
+<text x="129" y="304" font-size="11.5" text-anchor="middle" fill="#1b1f24">layer 3 - full attention</text>
+
+<text x="248" y="246" font-size="12" fill="#2f6fb3">x16</text>
+<text x="248" y="262" font-size="11" fill="#6b7480">= 64 layers</text>
+<text x="248" y="278" font-size="11" fill="#6b7480">48 GDN</text>
+<text x="248" y="292" font-size="11" fill="#6b7480">16 full attn</text>
+
+<line x1="129" y1="326" x2="129" y2="344" stroke="#8a93a0" stroke-width="1.5"/>
+<rect x="24" y="344" width="210" height="30" rx="5" fill="#eef2f6" stroke="#8a93a0"/>
+<text x="129" y="364" font-size="12.5" text-anchor="middle" fill="#1b1f24">output_norm (f32)</text>
+<line x1="129" y1="374" x2="129" y2="392" stroke="#8a93a0" stroke-width="1.5"/>
+<rect x="24" y="392" width="210" height="34" rx="5" fill="#eef2f6" stroke="#8a93a0"/>
+<text x="129" y="414" font-size="12.5" text-anchor="middle" fill="#1b1f24">output  [5120, 248320]</text>
+<text x="240" y="411" font-size="11" fill="#c77c1e">ternary</text>
+
+<text x="24" y="458" font-size="12" font-weight="600" fill="#1b1f24">Weight types in the file</text>
+<text x="24" y="478" font-size="11.5" fill="#6b7480">402 tensors ternary PQ2_0  - all the big projections</text>
+<text x="24" y="495" font-size="11.5" fill="#6b7480">96 tensors BF16  - ssm_alpha / ssm_beta  [5120, 48]</text>
+<text x="24" y="512" font-size="11.5" fill="#6b7480">353 tensors F32  - norms, conv1d, biases</text>
+<text x="24" y="536" font-size="11.5" fill="#1b1f24">6.70 GiB total = 2.13 bits per weight</text>
+<text x="24" y="553" font-size="11.5" fill="#6b7480">(fp16 would be ~54 GB)</text>
+
+<!-- ===== right: one layer expanded ===== -->
+<text x="320" y="110" font-size="14" font-weight="600" fill="#1b1f24">What one layer does</text>
+
+<rect x="320" y="124" width="300" height="28" rx="5" fill="#eef2f6" stroke="#8a93a0"/>
+<text x="470" y="143" font-size="12" text-anchor="middle" fill="#1b1f24">attn_norm (RMS, f32)</text>
+<line x1="470" y1="152" x2="470" y2="168" stroke="#8a93a0" stroke-width="1.5"/>
+
+<rect x="320" y="168" width="300" height="28" rx="5" fill="#f0e9f5" stroke="#7d5ba6" stroke-width="1.5"/>
+<text x="470" y="187" font-size="12" font-weight="600" text-anchor="middle" fill="#4a3366">MIXER  (one of the two below)</text>
+<line x1="470" y1="196" x2="470" y2="212" stroke="#8a93a0" stroke-width="1.5"/>
+
+<rect x="320" y="212" width="300" height="26" rx="5" fill="#eef2f6" stroke="#8a93a0"/>
+<text x="470" y="230" font-size="12" text-anchor="middle" fill="#1b1f24">+ residual</text>
+<line x1="470" y1="238" x2="470" y2="254" stroke="#8a93a0" stroke-width="1.5"/>
+<rect x="320" y="254" width="300" height="26" rx="5" fill="#eef2f6" stroke="#8a93a0"/>
+<text x="470" y="272" font-size="12" text-anchor="middle" fill="#1b1f24">post_attention_norm</text>
+<line x1="470" y1="280" x2="470" y2="296" stroke="#8a93a0" stroke-width="1.5"/>
+
+<rect x="320" y="296" width="300" height="86" rx="6" fill="#f7f9fb" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="470" y="315" font-size="12" font-weight="600" text-anchor="middle" fill="#2a8c82">FFN - SwiGLU (same in both layer types)</text>
+<text x="334" y="335" font-size="11.5" fill="#1b1f24">ffn_gate  [5120 -&gt; 17408]   ffn_up  [5120 -&gt; 17408]</text>
+<text x="334" y="353" font-size="11.5" fill="#1b1f24">silu(gate) * up</text>
+<text x="334" y="371" font-size="11.5" fill="#1b1f24">ffn_down  [17408 -&gt; 5120]</text>
+<line x1="470" y1="382" x2="470" y2="398" stroke="#8a93a0" stroke-width="1.5"/>
+<rect x="320" y="398" width="300" height="26" rx="5" fill="#eef2f6" stroke="#8a93a0"/>
+<text x="470" y="416" font-size="12" text-anchor="middle" fill="#1b1f24">+ residual</text>
+
+<!-- mixer variant A -->
+<rect x="650" y="124" width="326" height="176" rx="6" fill="#f3faf8" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="664" y="144" font-size="12.5" font-weight="600" fill="#2a8c82">A. GatedDeltaNet - linear attention (48 layers)</text>
+<text x="664" y="164" font-size="11.5" fill="#1b1f24">attn_qkv [5120 -&gt; 10240]  =  q 2048 | k 2048 | v 6144</text>
+<text x="664" y="181" font-size="11.5" fill="#1b1f24">ssm_conv1d, kernel 4, over all 10240 channels, then SiLU</text>
+<text x="664" y="198" font-size="11.5" fill="#c0392b">q and k L2-normalized TOGETHER as one [128, 32] tensor</text>
+<text x="664" y="215" font-size="11.5" fill="#1b1f24">16 k/q heads, 48 v heads, head dim 128 (GQA 3:1)</text>
+<text x="664" y="232" font-size="11.5" fill="#1b1f24">recurrent scan, state [128, 128] per v head</text>
+<text x="664" y="249" font-size="11.5" fill="#1b1f24">gates: ssm_alpha / ssm_beta (BF16), ssm_a, ssm_dt.bias</text>
+<text x="664" y="266" font-size="11.5" fill="#1b1f24">ssm_norm, gated by z = attn_gate [5120 -&gt; 6144]</text>
+<text x="664" y="283" font-size="11.5" fill="#1b1f24">ssm_out [6144 -&gt; 5120]</text>
+
+<!-- mixer variant B -->
+<rect x="650" y="316" width="326" height="146" rx="6" fill="#fdf7ee" stroke="#c77c1e" stroke-width="1.5"/>
+<text x="664" y="336" font-size="12.5" font-weight="600" fill="#a8641a">B. Full attention (16 layers, every 4th)</text>
+<text x="664" y="356" font-size="11.5" fill="#1b1f24">attn_q [5120 -&gt; 12288] = q 6144 + output gate 6144</text>
+<text x="664" y="373" font-size="11.5" fill="#1b1f24">attn_k, attn_v [5120 -&gt; 1024] each</text>
+<text x="664" y="390" font-size="11.5" fill="#1b1f24">24 q heads, 4 kv heads, head dim 256 (GQA 6:1)</text>
+<text x="664" y="407" font-size="11.5" fill="#1b1f24">per-head q/k RMS norm [256]</text>
+<text x="664" y="424" font-size="11.5" fill="#1b1f24">interleaved MRoPE, sections [11, 11, 10, 0], base 1e7</text>
+<text x="664" y="441" font-size="11.5" fill="#1b1f24">attn_output [6144 -&gt; 5120]</text>
+
+<!-- note -->
+<rect x="320" y="452" width="656" height="106" rx="6" fill="#fdf0dc" stroke="#c77c1e" stroke-width="1.5"/>
+<text x="334" y="472" font-size="12.5" font-weight="600" fill="#a8641a">Every ternary projection lives in a rotated basis</text>
+<text x="334" y="492" font-size="11.5" fill="#1b1f24">The weights were not quantized directly. First the input axis was rotated by a 1024-wide Hadamard</text>
+<text x="334" y="509" font-size="11.5" fill="#1b1f24">matrix (with a per-column sign flip), which spreads outliers so that ternary quantization loses less.</text>
+<text x="334" y="526" font-size="11.5" fill="#1b1f24">So at run time the activation must get the SAME transform before every such matmul, otherwise the</text>
+<text x="334" y="543" font-size="11.5" fill="#1b1f24">output is garbage. See diagram 04.</text>
+
+<text x="24" y="590" font-size="11" fill="#6b7480">All numbers read from the GGUF metadata and tensor table of Ternary-Bonsai-2-27B-PQ2_0.gguf.</text>
+</svg>
+</figure></p>
+<p>Bonsai 2 27B declares itself as architecture <code>qwen35</code> in its GGUF file - a 27 B dense model
+(no mixture-of-experts), 64 layers, hidden size 5120, 248320-token vocabulary, 262 k context.</p>
+<p>The interesting part is that it is a <strong>hybrid attention</strong> model. Only every 4th layer uses the
+attention you would expect. The other three quarters use a <em>linear attention</em> mechanism called
+<strong>GatedDeltaNet</strong>:</p>
+<ul>
+<li><strong>48 layers - GatedDeltaNet.</strong> Instead of comparing every token against every other token,
+  this keeps a fixed-size recurrent state (a 128 x 128 matrix per head) and updates it as tokens
+  stream past. Cost per token is constant, so long contexts stay cheap. This is why the model can
+  claim a 262 k context without a 262 k-sized attention matrix.</li>
+<li><strong>16 layers - full attention.</strong> Normal softmax attention with 24 query heads over 4 key/value
+  heads, so the model still has a way to do precise long-range lookups.</li>
+</ul>
+<p>Every layer, of both kinds, then runs the same SwiGLU feed-forward network
+(5120 -&gt; 17408 -&gt; 5120).</p>
+<h3>Why that matters here</h3>
+<p>The GatedDeltaNet layers are where two of the four fixes landed. Linear attention has a more
+intricate graph than plain attention - a 1-D convolution over q/k/v, per-head normalization,
+two learned gates, and a recurrent scan - and that gave more surface area for shape bugs.</p>
+<hr /></section><section class="panel" role="tabpanel" id="tab-2-2-how-pq2-0-stores-a-ternary-weight" aria-labelledby="btn-tab-2-2-how-pq2-0-stores-a-ternary-weight" hidden><h2>2. How PQ2_0 stores a ternary weight</h2><p><figure class="fig"><svg class="diagram" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 620" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="620" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">PQ2_0 - how a ternary weight block is stored</text>
+<text x="24" y="56" font-size="13" fill="#6b7480">"Prism Q2_0". A ggml type private to the PrismML fork (type id 142). Every weight is -1, 0 or +1.</text>
+
+<!-- block layout -->
+<text x="24" y="92" font-size="14" font-weight="600" fill="#1b1f24">One block = 128 weights = 34 bytes</text>
+
+<rect x="24" y="104" width="86" height="46" rx="4" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="67" y="124" font-size="12" font-weight="600" text-anchor="middle" fill="#2f6fb3">d</text>
+<text x="67" y="141" font-size="11" text-anchor="middle" fill="#1b1f24">f16 scale</text>
+
+<rect x="114" y="104" width="620" height="46" rx="4" fill="#e4f1ef" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="424" y="124" font-size="12" font-weight="600" text-anchor="middle" fill="#2a8c82">qs[32]  -  32 bytes</text>
+<text x="424" y="141" font-size="11" text-anchor="middle" fill="#1b1f24">128 codes x 2 bits, 4 codes packed per byte</text>
+
+<text x="748" y="123" font-size="12" fill="#1b1f24">2 + 32 = 34 bytes</text>
+<text x="748" y="141" font-size="12" fill="#1b1f24">34 x 8 / 128 = <tspan font-weight="600">2.125 bpw</tspan></text>
+
+<!-- byte zoom -->
+<text x="24" y="188" font-size="14" font-weight="600" fill="#1b1f24">Inside one byte of qs - code j sits at bits [2j, 2j+1], lowest bits first</text>
+
+<rect x="24" y="202" width="440" height="56" rx="4" fill="#f7f9fb" stroke="#8a93a0"/>
+<line x1="134" y1="202" x2="134" y2="258" stroke="#8a93a0"/>
+<line x1="244" y1="202" x2="244" y2="258" stroke="#8a93a0"/>
+<line x1="354" y1="202" x2="354" y2="258" stroke="#8a93a0"/>
+<text x="79" y="224" font-size="12" text-anchor="middle" fill="#6b7480">bits 7..6</text>
+<text x="189" y="224" font-size="12" text-anchor="middle" fill="#6b7480">bits 5..4</text>
+<text x="299" y="224" font-size="12" text-anchor="middle" fill="#6b7480">bits 3..2</text>
+<text x="409" y="224" font-size="12" text-anchor="middle" fill="#6b7480">bits 1..0</text>
+<text x="79" y="246" font-size="13" font-weight="600" text-anchor="middle" fill="#1b1f24">code 3</text>
+<text x="189" y="246" font-size="13" font-weight="600" text-anchor="middle" fill="#1b1f24">code 2</text>
+<text x="299" y="246" font-size="13" font-weight="600" text-anchor="middle" fill="#1b1f24">code 1</text>
+<text x="409" y="246" font-size="13" font-weight="600" text-anchor="middle" fill="#1b1f24">code 0</text>
+
+<text x="484" y="222" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">byte_index = j / 4</text>
+<text x="484" y="242" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">bit_offset = (j % 4) * 2</text>
+<text x="484" y="262" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">code = (qs[byte_index] &gt;&gt; bit_offset) &amp; 0x03</text>
+
+<!-- code table -->
+<text x="24" y="302" font-size="14" font-weight="600" fill="#1b1f24">Code meaning</text>
+<rect x="24" y="314" width="330" height="112" rx="5" fill="#f7f9fb" stroke="#8a93a0"/>
+<line x1="24" y1="340" x2="354" y2="340" stroke="#8a93a0"/>
+<line x1="114" y1="314" x2="114" y2="426" stroke="#8a93a0"/>
+<line x1="214" y1="314" x2="214" y2="426" stroke="#8a93a0"/>
+<text x="69" y="332" font-size="12" font-weight="600" text-anchor="middle" fill="#6b7480">code</text>
+<text x="164" y="332" font-size="12" font-weight="600" text-anchor="middle" fill="#6b7480">code - 1</text>
+<text x="284" y="332" font-size="12" font-weight="600" text-anchor="middle" fill="#6b7480">value</text>
+<text x="69" y="360" font-size="12" text-anchor="middle" fill="#1b1f24">0</text><text x="164" y="360" font-size="12" text-anchor="middle" fill="#1b1f24">-1</text><text x="284" y="360" font-size="12" text-anchor="middle" fill="#1b1f24">-d</text>
+<text x="69" y="382" font-size="12" text-anchor="middle" fill="#1b1f24">1</text><text x="164" y="382" font-size="12" text-anchor="middle" fill="#1b1f24">0</text><text x="284" y="382" font-size="12" text-anchor="middle" fill="#1b1f24">0</text>
+<text x="69" y="404" font-size="12" text-anchor="middle" fill="#1b1f24">2</text><text x="164" y="404" font-size="12" text-anchor="middle" fill="#1b1f24">+1</text><text x="284" y="404" font-size="12" text-anchor="middle" fill="#1b1f24">+d</text>
+<text x="69" y="421" font-size="11" text-anchor="middle" fill="#c0392b">3</text><text x="164" y="421" font-size="11" text-anchor="middle" fill="#c0392b">+2</text><text x="284" y="421" font-size="11" text-anchor="middle" fill="#c0392b">unused</text>
+
+<rect x="374" y="314" width="360" height="72" rx="5" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="390" y="336" font-size="13" font-weight="600" fill="#2f6fb3">Dequantization</text>
+<text x="390" y="362" font-size="14" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">value = (code - 1) * d</text>
+<text x="390" y="378" font-size="11" fill="#6b7480">one subtract, one multiply - that is the whole codec</text>
+
+<text x="374" y="410" font-size="11.5" fill="#6b7480">"2 bits for 3 values" wastes one slot (code 3 is never used),</text>
+<text x="374" y="427" font-size="11.5" fill="#6b7480">which is the price for making unpacking a shift and a mask.</text>
+
+<!-- comparison -->
+<text x="24" y="470" font-size="14" font-weight="600" fill="#1b1f24">Why 2.125 bpw and not 1.58</text>
+<rect x="24" y="482" width="952" height="104" rx="5" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="40" y="504" font-size="11.5" fill="#1b1f24">log2(3) = 1.585 bits is the information-theoretic floor for a trit. Prism ships two packings that trade size against unpack cost:</text>
+<text x="40" y="528" font-size="12" fill="#1b1f24"><tspan font-weight="600">PQ2_0</tspan>  - one trit per 2-bit slot, 128 per group  -  2.125 bpw  -  7.21 GB  -  unpack = shift + mask  -  <tspan fill="#2d8a4e">used here</tspan></text>
+<text x="40" y="548" font-size="12" fill="#1b1f24"><tspan font-weight="600">PTQ1_0</tspan> - 5 trits packed into a byte in base 3, 128 per group  -  1.75 bpw  -  5.95 GB  -  unpack = divides by 3</text>
+<text x="40" y="572" font-size="11.5" fill="#6b7480">The group of 128 also matters: one f16 scale per 128 weights adds 16/128 = 0.125 bpw. That is where 2.0 + 0.125 comes from.</text>
+</svg>
+</figure></p>
+<p>Every weight in the big projections is one of three values: <code>-1</code>, <code>0</code>, <code>+1</code>. Storing a <em>trit</em>
+needs <code>log2(3) = 1.585</code> bits in theory. PQ2_0 ("Prism Q2_0", a ggml type private to the PrismML
+fork) spends a bit more for simplicity:</p>
+<ul>
+<li>Weights are grouped in <strong>blocks of 128</strong>.</li>
+<li>Each block has <strong>one fp16 scale</strong> <code>d</code> (2 bytes) and <strong>32 bytes of codes</strong> (128 codes x 2 bits).</li>
+<li>A code is <code>0</code>, <code>1</code> or <code>2</code>, and the value is <strong><code>(code - 1) * d</code></strong>. Code <code>3</code> is never used.</li>
+</ul>
+<p>That is 34 bytes per 128 weights = <strong>2.125 bits per weight</strong>. The 2 bits of payload plus
+<code>16 / 128 = 0.125</code> bits of scale is exactly where the number comes from.</p>
+<p>The wasted 4th code buys something real: unpacking is a shift and a mask, nothing more. The
+sibling format <code>PTQ1_0</code> packs 5 trits into a byte in base 3 and reaches 1.75 bpw, but then
+unpacking needs divisions. Prism ships both and lets you choose.</p>
+<blockquote>
+<p><strong>A useful way to think about it:</strong> the model is not "compressed and then decompressed". The
+weights genuinely <em>are</em> -1/0/+1. The scale just restores the magnitude per group of 128.</p>
+</blockquote>
+<hr /></section><section class="panel" role="tabpanel" id="tab-3-3-the-twist-the-weights-live-in-a-rotate" aria-labelledby="btn-tab-3-3-the-twist-the-weights-live-in-a-rotate" hidden><h2>3. The twist: the weights live in a rotated basis</h2><p><figure class="fig"><svg class="diagram" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 740" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="740" fill="#ffffff"/>
+<defs><marker id="a2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#8a93a0"/></marker></defs>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">The Hadamard rotated basis - and why the model needs it at run time</text>
+
+<!-- why -->
+<text x="24" y="70" font-size="14" font-weight="600" fill="#1b1f24">1. Why rotate at all</text>
+<rect x="24" y="82" width="952" height="96" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="40" y="104" font-size="12" fill="#1b1f24">Ternary quantization has exactly three levels per group. A group whose values are mostly tiny plus one huge outlier quantizes</text>
+<text x="40" y="121" font-size="12" fill="#1b1f24">terribly: the scale is set by the outlier, so everything else collapses to 0.</text>
+<text x="40" y="145" font-size="12" fill="#1b1f24">A Hadamard rotation is an orthogonal mixing of 1024 channels: every output is a +/- sum of all 1024 inputs. That smears any</text>
+<text x="40" y="162" font-size="12" fill="#1b1f24">single outlier across the whole block, so the values become near-Gaussian and ternary loses far less.</text>
+<text x="600" y="145" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#2d8a4e">W_rot = W . H</text>
+<text x="600" y="163" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#2d8a4e">x_rot = H . x</text>
+<text x="600" y="181" font-size="11.5" fill="#6b7480">H orthogonal =&gt; W_rot . x_rot = W . x</text>
+
+<!-- what -->
+<text x="24" y="212" font-size="14" font-weight="600" fill="#1b1f24">2. What exactly the transform is (read from the GGUF metadata)</text>
+<rect x="24" y="224" width="468" height="150" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="40" y="246" font-size="11.5" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">prism.hadamard.block_size  = 1024</text>
+<text x="40" y="265" font-size="11.5" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">prism.hadamard.transform   = normalized-sylvester-</text>
+<text x="40" y="282" font-size="11.5" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">                             walsh-hadamard</text>
+<text x="40" y="301" font-size="11.5" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">prism.hadamard.axis        = input-last-dimension</text>
+<text x="40" y="320" font-size="11.5" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">prism.hadamard.sign_mode   = explicit</text>
+<text x="40" y="339" font-size="11.5" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">prism.hadamard.sign_widths = [5120, 6144, 17408]</text>
+<text x="40" y="361" font-size="11" fill="#6b7480">one +/-1 vector per distinct input width</text>
+
+<rect x="508" y="224" width="468" height="150" rx="6" fill="#eaf5ee" stroke="#2d8a4e"/>
+<text x="524" y="246" font-size="12.5" font-weight="600" fill="#2d8a4e">The matrix is generated, not stored</text>
+<text x="524" y="268" font-size="11.5" fill="#1b1f24">llama.cpp builds H_1024 at load time from the parity rule:</text>
+<text x="524" y="290" font-size="11.5" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">H[r][c] = popcount(r &amp; c) odd ? -s : +s</text>
+<text x="524" y="310" font-size="11.5" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">s       = 1 / sqrt(1024) = 1/32</text>
+<text x="524" y="334" font-size="11.5" fill="#1b1f24">It becomes an ordinary f32 [1024, 1024] weight tensor,</text>
+<text x="524" y="351" font-size="11.5" fill="#1b1f24">named prism.hadamard.1024, plus f32 sign vectors</text>
+<text x="524" y="368" font-size="11.5" fill="#1b1f24">named prism.hadamard.signs.&lt;width&gt;.</text>
+
+<!-- ggml graph -->
+<text x="24" y="408" font-size="14" font-weight="600" fill="#1b1f24">3. What it looks like in the ggml graph, in front of every folded weight</text>
+<text x="24" y="428" font-size="12" fill="#6b7480">Built by llama_mul_mat_hadamard() in src/llama-impl.h - it is ordinary ggml ops, nothing special.</text>
+
+<rect x="24" y="442" width="104" height="40" rx="5" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="76" y="460" font-size="11.5" font-weight="600" text-anchor="middle" fill="#1b1f24">activation x</text>
+<text x="76" y="476" font-size="11" text-anchor="middle" fill="#1b1f24">[T, K]</text>
+<path d="M 132 462 L 158 462" stroke="#8a93a0" stroke-width="2" marker-end="url(#a2)"/>
+
+<rect x="162" y="442" width="110" height="40" rx="5" fill="#fdf0dc" stroke="#c77c1e" stroke-width="1.5"/>
+<text x="217" y="460" font-size="11.5" font-weight="600" text-anchor="middle" fill="#1b1f24">MUL</text>
+<text x="217" y="476" font-size="11" text-anchor="middle" fill="#1b1f24">by signs [K]</text>
+<path d="M 276 462 L 302 462" stroke="#8a93a0" stroke-width="2" marker-end="url(#a2)"/>
+
+<rect x="306" y="442" width="124" height="40" rx="5" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="368" y="460" font-size="11.5" font-weight="600" text-anchor="middle" fill="#1b1f24">RESHAPE</text>
+<text x="368" y="476" font-size="11" text-anchor="middle" fill="#1b1f24">[T*K/1024, 1024]</text>
+<path d="M 434 462 L 460 462" stroke="#8a93a0" stroke-width="2" marker-end="url(#a2)"/>
+
+<rect x="464" y="442" width="130" height="40" rx="5" fill="#f0e9f5" stroke="#7d5ba6" stroke-width="1.5"/>
+<text x="529" y="460" font-size="11.5" font-weight="600" text-anchor="middle" fill="#4a3366">MUL_MAT</text>
+<text x="529" y="476" font-size="11" text-anchor="middle" fill="#4a3366">by H [1024,1024]</text>
+<path d="M 598 462 L 624 462" stroke="#8a93a0" stroke-width="2" marker-end="url(#a2)"/>
+
+<rect x="628" y="442" width="110" height="40" rx="5" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="683" y="460" font-size="11.5" font-weight="600" text-anchor="middle" fill="#1b1f24">RESHAPE</text>
+<text x="683" y="476" font-size="11" text-anchor="middle" fill="#1b1f24">back to [T, K]</text>
+<path d="M 742 462 L 768 462" stroke="#8a93a0" stroke-width="2" marker-end="url(#a2)"/>
+
+<rect x="772" y="442" width="204" height="40" rx="5" fill="#e4f1ef" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="874" y="460" font-size="11.5" font-weight="600" text-anchor="middle" fill="#1b1f24">MUL_MAT by the</text>
+<text x="874" y="476" font-size="11" text-anchor="middle" fill="#1b1f24">ternary weight</text>
+
+<text x="24" y="504" font-size="11.5" fill="#6b7480">Applied to: output.weight, and per layer attn_qkv / attn_gate / ssm_out / ffn_gate / ffn_up / ffn_down (and the attn_q/k/v of full-attention layers).</text>
+<text x="24" y="521" font-size="11.5" fill="#6b7480">token_embd gets the INVERSE rotation instead, because its rows are read by a lookup rather than a matmul.</text>
+
+<!-- fold -->
+<text x="24" y="556" font-size="14" font-weight="600" fill="#1b1f24">4. In OpenVINO the whole chain collapses into the matmul</text>
+
+<rect x="24" y="570" width="440" height="78" rx="6" fill="#fdecea" stroke="#c0392b"/>
+<text x="244" y="592" font-size="12.5" font-weight="600" text-anchor="middle" fill="#c0392b">without the fold</text>
+<text x="40" y="614" font-size="11.5" fill="#1b1f24">~400 extra 1024x1024 matmuls per token, plus the</text>
+<text x="40" y="631" font-size="11.5" fill="#1b1f24">reshapes - real work on the critical path.</text>
+
+<path d="M 474 609 L 516 609" stroke="#8a93a0" stroke-width="2" marker-end="url(#a2)"/>
+<text x="495" y="600" font-size="10" text-anchor="middle" fill="#6b7480">GPU plugin pass</text>
+<text x="495" y="628" font-size="10" text-anchor="middle" fill="#6b7480">FuseHadamardIntoFC</text>
+
+<rect x="536" y="570" width="440" height="78" rx="6" fill="#eaf5ee" stroke="#2d8a4e"/>
+<text x="756" y="592" font-size="12.5" font-weight="600" text-anchor="middle" fill="#2d8a4e">with the fold (default)</text>
+<text x="552" y="614" font-size="11.5" fill="#1b1f24">signs + rotation become attributes on the matmul; the</text>
+<text x="552" y="631" font-size="11.5" fill="#1b1f24">kernel runs a fast FWHT into scratch, then the GEMM.</text>
+
+<rect x="24" y="662" width="952" height="62" rx="6" fill="#fdf0dc" stroke="#c77c1e" stroke-width="1.5"/>
+<text x="40" y="684" font-size="12" fill="#1b1f24">The pass verifies the constant really is the normalized Sylvester H_1024 before folding. It also means the ternary kernel is the</text>
+<text x="40" y="701" font-size="12" fill="#1b1f24">ONLY implementation that applies the rotation - so if that kernel later refuses the node, the plugin raises a hard error instead of</text>
+<text x="40" y="718" font-size="12" fill="#1b1f24">falling back to a kernel that would silently ignore the transform and produce garbage. That behaviour drove most of the debugging.</text>
+</svg>
+</figure></p>
+<p>This is the part that makes the model unusual to support, and it is worth understanding before
+looking at any code.</p>
+<p><strong>The problem.</strong> Ternary quantization has three levels per group. If a group of 128 numbers is
+mostly small but contains one large outlier, the scale gets set by the outlier and everything
+else rounds to 0. You lose almost all the information.</p>
+<p><strong>The trick.</strong> Before quantizing, multiply the weight's input axis by a <strong>Hadamard matrix</strong> - an
+orthogonal matrix of <code>+s</code> and <code>-s</code> entries. Every output channel becomes a plus/minus sum of all
+1024 input channels, so any single outlier is smeared across the whole block and the values turn
+roughly Gaussian. Ternary then loses far less.</p>
+<p>Because the matrix is orthogonal, the math is unchanged <em>provided you rotate the activation the
+same way</em>:</p>
+<pre><code>W_rot = W . H        (done once, offline, by whoever quantized the model)
+x_rot = H . x        (must happen at run time, every forward pass)
+
+W_rot . x_rot  ==  W . x
+</code></pre>
+<p><strong>The consequence.</strong> If you load these weights and skip the activation rotation, you do not get a
+slightly worse answer - you get garbage. The model card warns about exactly this. So the rotation
+is not an optimization detail, it is part of the model definition.</p>
+<p>For this model the transform is a 1024-wide normalized Sylvester-Walsh-Hadamard matrix (scaled by
+<code>1/sqrt(1024) = 1/32</code>), preceded by a fixed per-channel sign flip. llama.cpp does not load the
+matrix from the file - it <em>generates</em> it at load time from a parity rule, and reads the sign
+vectors out of the GGUF metadata.</p>
+<p>In the ggml graph this shows up as four ordinary ops in front of every ternary matmul:</p>
+<pre><code>x -&gt; MUL by signs -&gt; RESHAPE to [T*K/1024, 1024] -&gt; MUL_MAT by H -&gt; RESHAPE back -&gt; MUL_MAT by W
+</code></pre>
+<p>Nothing exotic. Which is good news: a backend that supports <code>MUL</code>, <code>RESHAPE</code> and <code>MUL_MAT</code>
+already supports the rotation - just slowly, since it is ~400 extra 1024x1024 matmuls per token.
+The OpenVINO GPU plugin has a pass that recognises that chain and folds it into the matmul, so a
+fast fused kernel does it instead.</p>
+<hr /></section><section class="panel" role="tabpanel" id="tab-4-4-teaching-the-openvino-backend-to-read-" aria-labelledby="btn-tab-4-4-teaching-the-openvino-backend-to-read-" hidden><h2>4. Teaching the OpenVINO backend to read PQ2_0</h2><p><figure class="fig"><svg class="diagram" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="700" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">Fix 1 - mapping PQ2_0 onto OpenVINO's u2</text>
+<text x="24" y="56" font-size="13" fill="#6b7480">OpenVINO has no signed 2-bit type, so ternary is carried as UNSIGNED u2 codes {0,1,2} with a zero point of 1.</text>
+<text x="24" y="74" font-size="13" fill="#6b7480">That is exactly how ggml already stores PQ2_0 - so the two formats line up with no conversion.</text>
+
+<!-- the lucky coincidence -->
+<rect x="24" y="96" width="952" height="150" rx="6" fill="#eaf5ee" stroke="#2d8a4e" stroke-width="1.5"/>
+<text x="40" y="118" font-size="14" font-weight="600" fill="#2d8a4e">The key observation: the bit layouts are identical</text>
+
+<text x="40" y="146" font-size="12" font-weight="600" fill="#1b1f24">ggml PQ2_0</text>
+<text x="40" y="166" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">code j  -&gt;  byte j/4,  bits [2*(j%4), +1]</text>
+<text x="40" y="184" font-size="11.5" fill="#6b7480">lowest bits hold the earliest element</text>
+
+<text x="40" y="212" font-size="12" font-weight="600" fill="#1b1f24">OpenVINO u2</text>
+<text x="40" y="232" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">value j  -&gt;  byte j/4,  bits [2*(j%4), +1]</text>
+
+<text x="540" y="146" font-size="12" fill="#1b1f24">OpenVINO packs every sub-byte type LSB-first</text>
+<text x="540" y="164" font-size="12" fill="#1b1f24">except u1:</text>
+<text x="540" y="186" font-size="11.5" font-family="ui-monospace, Consolas, monospace" fill="#6b7480">constexpr bool is_lsb_packed(Type_t et) {</text>
+<text x="540" y="202" font-size="11.5" font-family="ui-monospace, Consolas, monospace" fill="#6b7480">    return et != u1;</text>
+<text x="540" y="218" font-size="11.5" font-family="ui-monospace, Consolas, monospace" fill="#6b7480">}</text>
+<text x="540" y="238" font-size="12" font-weight="600" fill="#2d8a4e">=&gt; the 32 code bytes are copied verbatim.</text>
+
+<!-- extraction -->
+<text x="24" y="282" font-size="14" font-weight="600" fill="#1b1f24">So extraction is trivial</text>
+
+<rect x="24" y="296" width="250" height="118" rx="5" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="149" y="318" font-size="12.5" font-weight="600" text-anchor="middle" fill="#1b1f24">GGUF block (34 B)</text>
+<rect x="40" y="330" width="52" height="30" rx="3" fill="#dce9f5" stroke="#2f6fb3"/>
+<text x="66" y="350" font-size="11" text-anchor="middle" fill="#1b1f24">d f16</text>
+<rect x="96" y="330" width="162" height="30" rx="3" fill="#e4f1ef" stroke="#2a8c82"/>
+<text x="177" y="350" font-size="11" text-anchor="middle" fill="#1b1f24">qs[32]</text>
+<text x="40" y="382" font-size="11" fill="#6b7480">scales and codes are interleaved,</text>
+<text x="40" y="398" font-size="11" fill="#6b7480">one pair per 128 weights</text>
+
+<path d="M 282 355 L 326 355" stroke="#8a93a0" stroke-width="2" marker-end="url(#ar)"/>
+<defs><marker id="ar" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#8a93a0"/></marker></defs>
+
+<rect x="334" y="296" width="290" height="118" rx="5" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="479" y="318" font-size="12.5" font-weight="600" text-anchor="middle" fill="#1b1f24">split into two plain arrays</text>
+<rect x="350" y="330" width="258" height="26" rx="3" fill="#e4f1ef" stroke="#2a8c82"/>
+<text x="479" y="348" font-size="11" text-anchor="middle" fill="#1b1f24">weights: u2 [N, K]   (memcpy of every qs)</text>
+<rect x="350" y="362" width="258" height="26" rx="3" fill="#dce9f5" stroke="#2f6fb3"/>
+<text x="479" y="380" font-size="11" text-anchor="middle" fill="#1b1f24">scales: f16 [N, K/128]</text>
+<text x="350" y="404" font-size="11" fill="#2d8a4e">no bit shuffling, no re-encoding</text>
+
+<path d="M 632 355 L 676 355" stroke="#8a93a0" stroke-width="2" marker-end="url(#ar)"/>
+
+<rect x="684" y="296" width="292" height="118" rx="5" fill="#fdf7ee" stroke="#c77c1e"/>
+<text x="830" y="318" font-size="12.5" font-weight="600" text-anchor="middle" fill="#a8641a">kernel's own repack (in the plugin)</text>
+<text x="698" y="340" font-size="11" fill="#1b1f24">done once at compile time, not per inference:</text>
+<text x="698" y="358" font-size="11" fill="#1b1f24">[N,K] u2  -&gt;  [K/16, N] uint32, K-major</text>
+<text x="698" y="376" font-size="11" fill="#1b1f24">codes re-encoded to two's complement {0,1,3}</text>
+<text x="698" y="398" font-size="11" fill="#6b7480">so inference never unpacks or reorders</text>
+
+<!-- the OV subgraph -->
+<text x="24" y="456" font-size="14" font-weight="600" fill="#1b1f24">What ggml-openvino emits into the OpenVINO graph</text>
+<text x="24" y="476" font-size="12" fill="#6b7480">This is the standard "weight decompression" shape that the GPU plugin recognises and folds into a compressed matmul.</text>
+
+<rect x="24" y="492" width="128" height="42" rx="5" fill="#e4f1ef" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="88" y="511" font-size="11.5" font-weight="600" text-anchor="middle" fill="#1b1f24">Constant</text>
+<text x="88" y="527" font-size="11" text-anchor="middle" fill="#1b1f24">u2 [N, K/128, 128]</text>
+<path d="M 156 513 L 186 513" stroke="#8a93a0" stroke-width="2" marker-end="url(#ar)"/>
+
+<rect x="190" y="492" width="100" height="42" rx="5" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="240" y="511" font-size="11.5" font-weight="600" text-anchor="middle" fill="#1b1f24">Convert</text>
+<text x="240" y="527" font-size="11" text-anchor="middle" fill="#1b1f24">to f16</text>
+<path d="M 294 513 L 324 513" stroke="#8a93a0" stroke-width="2" marker-end="url(#ar)"/>
+
+<rect x="328" y="492" width="132" height="42" rx="5" fill="#fdf0dc" stroke="#c77c1e" stroke-width="1.5"/>
+<text x="394" y="511" font-size="11.5" font-weight="600" text-anchor="middle" fill="#1b1f24">Subtract</text>
+<text x="394" y="527" font-size="11" text-anchor="middle" fill="#1b1f24">scalar f16 Constant 1</text>
+<path d="M 464 513 L 494 513" stroke="#8a93a0" stroke-width="2" marker-end="url(#ar)"/>
+
+<rect x="498" y="492" width="126" height="42" rx="5" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="561" y="511" font-size="11.5" font-weight="600" text-anchor="middle" fill="#1b1f24">Multiply</text>
+<text x="561" y="527" font-size="11" text-anchor="middle" fill="#1b1f24">scales [N,K/128,1]</text>
+<path d="M 628 513 L 658 513" stroke="#8a93a0" stroke-width="2" marker-end="url(#ar)"/>
+
+<rect x="662" y="492" width="100" height="42" rx="5" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="712" y="511" font-size="11.5" font-weight="600" text-anchor="middle" fill="#1b1f24">Reshape</text>
+<text x="712" y="527" font-size="11" text-anchor="middle" fill="#1b1f24">back to [N, K]</text>
+<path d="M 766 513 L 796 513" stroke="#8a93a0" stroke-width="2" marker-end="url(#ar)"/>
+
+<rect x="800" y="492" width="176" height="42" rx="5" fill="#f0e9f5" stroke="#7d5ba6" stroke-width="1.5"/>
+<text x="888" y="511" font-size="11.5" font-weight="600" text-anchor="middle" fill="#4a3366">MatMul</text>
+<text x="888" y="527" font-size="11" text-anchor="middle" fill="#4a3366">-&gt; FullyConnectedCompressed</text>
+
+<rect x="24" y="556" width="952" height="122" rx="6" fill="#fdecea" stroke="#c0392b" stroke-width="1.5"/>
+<text x="40" y="578" font-size="13" font-weight="600" fill="#c0392b">Two details that are easy to get wrong</text>
+<text x="40" y="602" font-size="12" fill="#1b1f24"><tspan font-weight="600">1. The zero point must be a Constant, not a Convert of an integer.</tspan>  The ternary kernel reads the zero point</text>
+<text x="40" y="619" font-size="12" fill="#1b1f24">directly out of memory at build time. If the graph says Convert(Constant(1)) instead of Constant(1.0f16), the value is</text>
+<text x="40" y="636" font-size="12" fill="#1b1f24">not there yet and the fusion silently does not happen. (Same trap hit earlier in the MoE work.)</text>
+<text x="40" y="660" font-size="12" fill="#1b1f24"><tspan font-weight="600">2. Never requantize a ternary tensor.</tspan>  See diagram 05, fix 4 - the backend used to force the embedding and output</text>
+<text x="40" y="677" font-size="12" fill="#1b1f24">weights to 8-bit, which inflates 2.13 bpw to 8 and drops them off the ternary path entirely.</text>
+</svg>
+</figure></p>
+<p>OpenVINO has no <em>signed</em> 2-bit type. It has unsigned <code>u2</code>. So ternary is represented as codes
+<code>{0, 1, 2}</code> with a <strong>zero point of 1</strong>, dequantized as <code>(code - 1) * scale</code>.</p>
+<p>If that sounds familiar, it is because it is byte-for-byte what PQ2_0 already does. And the bit
+packing matches too: both put element <code>j</code> at bits <code>[2*(j%4), +1]</code> of byte <code>j/4</code>, lowest bits
+first. (OpenVINO packs every sub-byte type LSB-first except <code>u1</code>.)</p>
+<p><strong>So the conversion is a <code>memcpy</code>.</strong> The 32 code bytes of each block are copied straight into an
+OpenVINO <code>u2</code> constant, with no bit shuffling and no re-encoding. Only the fp16 scales need
+gathering into a separate array, because ggml interleaves scale and codes while OpenVINO wants
+them separate.</p>
+<p>The backend then emits the standard "weight decompression" shape that the GPU plugin knows how to
+fold into a compressed matmul:</p>
+<pre><code>Constant(u2) -&gt; Convert(f16) -&gt; Subtract(1) -&gt; Multiply(scales) -&gt; Reshape -&gt; MatMul
+</code></pre>
+<p>Two things here are easy to get wrong, and both were real bugs:</p>
+<ol>
+<li><strong>The zero point must be a <code>Constant</code>, not a <code>Convert</code> of an integer constant.</strong> The ternary
+   kernel reads that value directly out of memory when it builds. A <code>Convert</code> node has not
+   produced a value yet, so the fusion silently does not happen.</li>
+<li><strong>Never requantize a ternary tensor.</strong> The backend had a rule that forced the token embedding
+   and output projection to 8-bit, for good reasons on other models. On this model it inflated
+   2.13 bpw to 8 bpw <em>and</em> knocked the output projection off the ternary path. That is fix 4.</li>
+</ol>
+<hr /></section><section class="panel" role="tabpanel" id="tab-5-5-the-four-fixes" aria-labelledby="btn-tab-5-5-the-four-fixes" hidden><h2>5. The four fixes</h2><p><figure class="fig"><svg class="diagram" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 760" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="760" fill="#ffffff"/>
+<defs><marker id="a3" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#8a93a0"/></marker></defs>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">End to end - from the GGUF file to the ternary GPU kernel</text>
+<text x="24" y="56" font-size="13" fill="#6b7480">Orange badges mark the four places that had to change. Everything else already existed.</text>
+
+<!-- stage 1 -->
+<rect x="24" y="76" width="640" height="62" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="40" y="98" font-size="13" font-weight="600" fill="#1b1f24">1.  llama.cpp loads the GGUF</text>
+<text x="40" y="118" font-size="11.5" fill="#1b1f24">Reads PQ2_0 tensors, builds H_1024 and the sign vectors from prism.hadamard.* metadata,</text>
+<text x="40" y="133" font-size="11.5" fill="#1b1f24">and records which weights are rotated.</text>
+<text x="676" y="104" font-size="11.5" fill="#6b7480">PrismML fork only -</text>
+<text x="676" y="120" font-size="11.5" fill="#6b7480">stock llama.cpp rejects</text>
+<text x="676" y="136" font-size="11.5" fill="#6b7480">the type name.</text>
+<path d="M 344 138 L 344 160" stroke="#8a93a0" stroke-width="2" marker-end="url(#a3)"/>
+
+<!-- stage 2 -->
+<rect x="24" y="164" width="640" height="62" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="40" y="186" font-size="13" font-weight="600" fill="#1b1f24">2.  llama.cpp builds the ggml compute graph</text>
+<text x="40" y="206" font-size="11.5" fill="#1b1f24">Ordinary ggml ops: MUL_MAT, RESHAPE, VIEW, L2_NORM, GATED_DELTA_NET, GLU, ...</text>
+<text x="40" y="221" font-size="11.5" fill="#1b1f24">The Hadamard chain appears as plain MUL + RESHAPE + MUL_MAT + RESHAPE.</text>
+<path d="M 344 226 L 344 248" stroke="#8a93a0" stroke-width="2" marker-end="url(#a3)"/>
+
+<!-- stage 3 -->
+<rect x="24" y="252" width="640" height="150" rx="6" fill="#e4f1ef" stroke="#2a8c82" stroke-width="2"/>
+<text x="40" y="274" font-size="13" font-weight="600" fill="#2a8c82">3.  ggml-openvino translates that graph into an OpenVINO model</text>
+<text x="40" y="296" font-size="11.5" fill="#1b1f24">Each ggml op has a translator. Weights become Constants with a decompression chain.</text>
+
+<rect x="40" y="306" width="290" height="40" rx="4" fill="#ffffff" stroke="#c77c1e" stroke-width="1.5"/>
+<text x="54" y="322" font-size="11" font-weight="600" fill="#a8641a">FIX 1  PQ2_0 -&gt; u2 Constant</text>
+<text x="54" y="338" font-size="10.5" fill="#1b1f24">ggml-quants.cpp, extra.{h,cpp}, decoder, openvino.cpp</text>
+
+<rect x="344" y="306" width="306" height="40" rx="4" fill="#ffffff" stroke="#c77c1e" stroke-width="1.5"/>
+<text x="358" y="322" font-size="11" font-weight="600" fill="#a8641a">FIX 4  do not requantize ternary</text>
+<text x="358" y="338" font-size="10.5" fill="#1b1f24">ggml-openvino-extra.cpp</text>
+
+<rect x="40" y="350" width="290" height="40" rx="4" fill="#ffffff" stroke="#c77c1e" stroke-width="1.5"/>
+<text x="54" y="366" font-size="11" font-weight="600" fill="#a8641a">FIX 2  re-slice joint q/k view</text>
+<text x="54" y="382" font-size="10.5" fill="#1b1f24">openvino/op/gated_delta_net.cpp</text>
+
+<rect x="344" y="350" width="306" height="40" rx="4" fill="#ffffff" stroke="#c77c1e" stroke-width="1.5"/>
+<text x="358" y="366" font-size="11" font-weight="600" fill="#a8641a">FIX 3  keep token axis dynamic in RESHAPE</text>
+<text x="358" y="382" font-size="10.5" fill="#1b1f24">openvino/op/reshape.cpp, ggml-decoder.cpp</text>
+
+<path d="M 344 402 L 344 424" stroke="#8a93a0" stroke-width="2" marker-end="url(#a3)"/>
+
+<!-- stage 4 -->
+<rect x="24" y="428" width="640" height="172" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="2"/>
+<text x="40" y="450" font-size="13" font-weight="600" fill="#2f6fb3">4.  OpenVINO GPU plugin compiles the model</text>
+<text x="40" y="470" font-size="11.5" fill="#1b1f24">A chain of graph passes runs, in this order - the order matters:</text>
+
+<rect x="40" y="480" width="610" height="26" rx="4" fill="#ffffff" stroke="#8a93a0"/>
+<text x="52" y="497" font-size="11" fill="#1b1f24">ConvertMatMulToFullyConnected  -&gt;  ConvertFullyConnectedToFullyConnectedCompressed</text>
+<rect x="40" y="510" width="610" height="26" rx="4" fill="#ffffff" stroke="#8a93a0"/>
+<text x="52" y="527" font-size="11" fill="#1b1f24">FullyConnectedHorizontalFusion   -  merges ffn_gate + ffn_up into ONE matmul  (needs a dynamic input shape)</text>
+<rect x="40" y="540" width="610" height="26" rx="4" fill="#ffffff" stroke="#8a93a0"/>
+<text x="52" y="557" font-size="11" fill="#1b1f24">FuseHadamardIntoFC               -  folds the rotation onto the matmul (diagram 04)</text>
+<rect x="40" y="570" width="610" height="24" rx="4" fill="#ffffff" stroke="#8a93a0"/>
+<text x="52" y="586" font-size="11" fill="#1b1f24">pick an implementation per matmul  -  ternocl_int2 is offered first, ahead of oneDNN and stock OpenCL</text>
+
+<path d="M 344 600 L 344 622" stroke="#8a93a0" stroke-width="2" marker-end="url(#a3)"/>
+
+<!-- stage 5 -->
+<rect x="24" y="626" width="640" height="112" rx="6" fill="#fdf7ee" stroke="#c77c1e" stroke-width="2"/>
+<text x="40" y="648" font-size="13" font-weight="600" fill="#a8641a">5.  The TernOCL kernel runs (added by OpenVINO PR #38460)</text>
+<text x="40" y="668" font-size="11.5" fill="#1b1f24">Accepts a matmul only if: constant u2 weights [N,K], K % 128 == 0, N % 16 == 0, f16 activations,</text>
+<text x="40" y="685" font-size="11.5" fill="#1b1f24">unpadded row-major, and a fused epilogue it knows (SwiGLU, residual add, bias, sigmoid, or none).</text>
+<text x="40" y="707" font-size="11.5" fill="#1b1f24">Repacks the weights once at compile time, then picks a kernel per call from the token count (diagram 09).</text>
+<text x="40" y="727" font-size="11.5" fill="#2d8a4e">Without this kernel the same model runs at 1.4 t/s instead of 527 t/s prefill.</text>
+
+<!-- right column: who owns what -->
+<text x="690" y="276" font-size="13" font-weight="600" fill="#1b1f24">Who owns which piece</text>
+<rect x="690" y="290" width="286" height="46" rx="5" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="704" y="308" font-size="11.5" font-weight="600" fill="#1b1f24">PrismML-Eng/llama.cpp</text>
+<text x="704" y="325" font-size="11" fill="#6b7480">PQ2_0 type, Hadamard runtime, qwen35</text>
+
+<rect x="690" y="344" width="286" height="46" rx="5" fill="#e4f1ef" stroke="#2a8c82"/>
+<text x="704" y="362" font-size="11.5" font-weight="600" fill="#2a8c82">ggml-openvino (our 4 fixes)</text>
+<text x="704" y="379" font-size="11" fill="#6b7480">161 lines across 7 files</text>
+
+<rect x="690" y="398" width="286" height="46" rx="5" fill="#dce9f5" stroke="#2f6fb3"/>
+<text x="704" y="416" font-size="11.5" font-weight="600" fill="#2f6fb3">OpenVINO GPU plugin</text>
+<text x="704" y="433" font-size="11" fill="#6b7480">graph passes, impl selection</text>
+
+<rect x="690" y="452" width="286" height="46" rx="5" fill="#fdf7ee" stroke="#c77c1e"/>
+<text x="704" y="470" font-size="11.5" font-weight="600" fill="#a8641a">OpenVINO PR #38460 + TernOCL</text>
+<text x="704" y="487" font-size="11" fill="#6b7480">the 2-bit OpenCL kernels</text>
+
+<rect x="690" y="516" width="286" height="84" rx="5" fill="#fdecea" stroke="#c0392b"/>
+<text x="704" y="536" font-size="11.5" font-weight="600" fill="#c0392b">All four pieces are needed</text>
+<text x="704" y="555" font-size="11" fill="#1b1f24">Miss the fork  -&gt; file will not load</text>
+<text x="704" y="572" font-size="11" fill="#1b1f24">Miss the fixes -&gt; crash or wrong output</text>
+<text x="704" y="589" font-size="11" fill="#1b1f24">Miss the PR    -&gt; 167x slower</text>
+</svg>
+</figure></p>
+<p>The diagram above shows the whole path from GGUF file to GPU kernel, with the four changes
+marked. Two of them are about the ternary format; two are about shapes.</p>
+<h3>Fix 1 - read PQ2_0 as <code>u2</code></h3>
+<p>Covered in section 4. Mechanical once you notice the bit layouts already agree.</p>
+<h3>Fix 2 - the joint q/k view in GatedDeltaNet</h3>
+<p><figure class="fig"><svg class="diagram" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 660" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="660" fill="#ffffff"/>
+<defs><marker id="a4" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#8a93a0"/></marker></defs>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">Fix 2 - the joint q/k view in GatedDeltaNet</text>
+<text x="24" y="56" font-size="13" fill="#6b7480">Symptom: "The number of value heads must be a multiple of query/key heads (GQA), but got v_H=48 and qk_H=96"</text>
+
+<!-- ggml graph -->
+<text x="24" y="92" font-size="14" font-weight="600" fill="#1b1f24">What dense qwen35 builds in ggml</text>
+<rect x="24" y="104" width="420" height="188" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+
+<rect x="40" y="118" width="388" height="30" rx="4" fill="#ffffff" stroke="#8a93a0"/>
+<text x="234" y="137" font-size="11.5" text-anchor="middle" fill="#1b1f24">conv output + SiLU   [10240, T]</text>
+<path d="M 234 148 L 234 162" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a4)"/>
+
+<rect x="40" y="166" width="388" height="30" rx="4" fill="#ffffff" stroke="#8a93a0"/>
+<text x="234" y="185" font-size="11.5" text-anchor="middle" fill="#1b1f24">VIEW  q and k together   [128, 32, T]</text>
+<path d="M 234 196 L 234 210" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a4)"/>
+
+<rect x="40" y="214" width="388" height="30" rx="4" fill="#fdf0dc" stroke="#c77c1e" stroke-width="1.5"/>
+<text x="234" y="233" font-size="11.5" font-weight="600" text-anchor="middle" fill="#1b1f24">L2_NORM over BOTH at once   [128, 32, T]</text>
+
+<path d="M 150 244 L 110 262" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a4)"/>
+<path d="M 320 244 L 360 262" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a4)"/>
+
+<rect x="40" y="262" width="150" height="26" rx="4" fill="#e4f1ef" stroke="#2a8c82"/>
+<text x="115" y="279" font-size="11" text-anchor="middle" fill="#1b1f24">VIEW q: heads 0..15</text>
+<rect x="278" y="262" width="150" height="26" rx="4" fill="#e4f1ef" stroke="#2a8c82"/>
+<text x="353" y="279" font-size="11" text-anchor="middle" fill="#1b1f24">VIEW k: heads 16..31</text>
+
+<text x="24" y="314" font-size="11.5" fill="#6b7480">One norm over both halves is cheaper than two. qwen35moe</text>
+<text x="24" y="331" font-size="11.5" fill="#6b7480">(Qwen3.5 / 3.6 35B-A3B) normalizes q and k separately, which</text>
+<text x="24" y="348" font-size="11.5" fill="#6b7480">is why this case had never been exercised.</text>
+
+<!-- the rule -->
+<rect x="468" y="104" width="508" height="188" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="484" y="126" font-size="13" font-weight="600" fill="#2f6fb3">The backend's rule for VIEW</text>
+<text x="484" y="150" font-size="12" fill="#1b1f24">On the dynamic (GPU) path, translating a VIEW is a</text>
+<text x="484" y="167" font-size="12" fill="#1b1f24"><tspan font-weight="600">no-op pass-through</tspan>. The contract is: "the consumer</text>
+<text x="484" y="184" font-size="12" fill="#1b1f24">re-slices". That keeps the graph small and lets the</text>
+<text x="484" y="201" font-size="12" fill="#1b1f24">consumer choose the cheapest way to read the slice.</text>
+<text x="484" y="228" font-size="12" fill="#1b1f24">The GatedDeltaNet translator honoured that contract</text>
+<text x="484" y="245" font-size="12" fill="#1b1f24">for its <tspan font-family="ui-monospace, Consolas, monospace">v</tspan> input ... and only for <tspan font-family="ui-monospace, Consolas, monospace">v</tspan>.</text>
+<text x="484" y="272" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#c0392b">q = context.get_input(0);   // full 32 heads!</text>
+
+<!-- before -->
+<text x="24" y="346" font-size="14" font-weight="600" fill="#c0392b">BEFORE - q and k arrive at the joint width, then GQA tiling doubles the mistake</text>
+<rect x="24" y="358" width="952" height="104" rx="6" fill="#fdecea" stroke="#c0392b" stroke-width="1.5"/>
+
+<rect x="40" y="374" width="150" height="34" rx="4" fill="#ffffff" stroke="#c0392b"/>
+<text x="115" y="388" font-size="11" text-anchor="middle" fill="#1b1f24">q from VIEW</text>
+<text x="115" y="402" font-size="11" font-weight="600" text-anchor="middle" fill="#c0392b">32 heads (wrong)</text>
+<path d="M 194 391 L 224 391" stroke="#8a93a0" stroke-width="2" marker-end="url(#a4)"/>
+
+<rect x="228" y="374" width="200" height="34" rx="4" fill="#ffffff" stroke="#8a93a0"/>
+<text x="328" y="388" font-size="11" text-anchor="middle" fill="#1b1f24">Tile by repeat = 48/16 = 3</text>
+<text x="328" y="402" font-size="11" text-anchor="middle" fill="#6b7480">repeat computed from DECLARED 16</text>
+<path d="M 432 391 L 462 391" stroke="#8a93a0" stroke-width="2" marker-end="url(#a4)"/>
+
+<rect x="466" y="374" width="150" height="34" rx="4" fill="#ffffff" stroke="#c0392b"/>
+<text x="541" y="388" font-size="11" text-anchor="middle" fill="#1b1f24">32 x 3 =</text>
+<text x="541" y="402" font-size="11" font-weight="600" text-anchor="middle" fill="#c0392b">96 heads</text>
+<path d="M 620 391 L 650 391" stroke="#8a93a0" stroke-width="2" marker-end="url(#a4)"/>
+
+<rect x="654" y="374" width="306" height="34" rx="4" fill="#fdecea" stroke="#c0392b" stroke-width="1.5"/>
+<text x="807" y="388" font-size="11" text-anchor="middle" fill="#c0392b">GatedDeltaNet rejects it: v has 48 heads,</text>
+<text x="807" y="402" font-size="11" text-anchor="middle" fill="#c0392b">48 % 96 != 0</text>
+
+<text x="40" y="432" font-size="11.5" fill="#1b1f24">Note the trap: the DECLARED shape (from ggml metadata) said 16 heads, so the repeat factor was right. The ACTUAL tensor was 32.</text>
+<text x="40" y="450" font-size="11.5" fill="#1b1f24">Reading only the declared shape makes the bug invisible - you have to compare declared against actual.</text>
+
+<!-- after -->
+<text x="24" y="498" font-size="14" font-weight="600" fill="#2d8a4e">AFTER - re-slice on the head axis first, exactly like v already was</text>
+<rect x="24" y="510" width="952" height="92" rx="6" fill="#eaf5ee" stroke="#2d8a4e" stroke-width="1.5"/>
+
+<rect x="40" y="526" width="150" height="34" rx="4" fill="#ffffff" stroke="#8a93a0"/>
+<text x="115" y="540" font-size="11" text-anchor="middle" fill="#1b1f24">q from VIEW</text>
+<text x="115" y="554" font-size="11" text-anchor="middle" fill="#6b7480">32 heads</text>
+<path d="M 194 543 L 224 543" stroke="#8a93a0" stroke-width="2" marker-end="url(#a4)"/>
+
+<rect x="228" y="526" width="230" height="34" rx="4" fill="#ffffff" stroke="#2d8a4e" stroke-width="1.5"/>
+<text x="343" y="540" font-size="11" font-weight="600" text-anchor="middle" fill="#2d8a4e">NEW: Slice on axis 2</text>
+<text x="343" y="554" font-size="10.5" text-anchor="middle" fill="#1b1f24">begin = view_offset / per-head stride</text>
+<path d="M 462 543 L 492 543" stroke="#8a93a0" stroke-width="2" marker-end="url(#a4)"/>
+
+<rect x="496" y="526" width="120" height="34" rx="4" fill="#ffffff" stroke="#2d8a4e"/>
+<text x="556" y="547" font-size="11" font-weight="600" text-anchor="middle" fill="#2d8a4e">16 heads</text>
+<path d="M 620 543 L 650 543" stroke="#8a93a0" stroke-width="2" marker-end="url(#a4)"/>
+
+<rect x="654" y="526" width="120" height="34" rx="4" fill="#ffffff" stroke="#8a93a0"/>
+<text x="714" y="547" font-size="11" text-anchor="middle" fill="#1b1f24">Tile x3 -&gt; 48</text>
+<path d="M 778 543 L 808 543" stroke="#8a93a0" stroke-width="2" marker-end="url(#a4)"/>
+
+<rect x="812" y="526" width="148" height="34" rx="4" fill="#eaf5ee" stroke="#2d8a4e" stroke-width="1.5"/>
+<text x="886" y="547" font-size="11" font-weight="600" text-anchor="middle" fill="#2d8a4e">48 == 48, accepted</text>
+
+<text x="40" y="582" font-size="11.5" fill="#1b1f24">The helper is a no-op whenever declared width == actual width, so models that normalize q and k separately are untouched.</text>
+
+<text x="24" y="634" font-size="11" fill="#6b7480">File: ggml/src/ggml-openvino/openvino/op/gated_delta_net.cpp - function slice_joint_head_view()</text>
+</svg>
+</figure></p>
+<p>This model normalizes its query and key tensors <strong>together</strong>, as one 32-head tensor, then takes
+two 16-head views of the result. That is cheaper than two separate normalizations.</p>
+<p>The OpenVINO backend has a design rule: translating a <code>VIEW</code> is a <strong>no-op pass-through</strong>, and the
+<em>consumer</em> is responsible for slicing out the part it wants. The GatedDeltaNet translator honoured
+that rule for its <code>v</code> input - and only for <code>v</code>. So <code>q</code> and <code>k</code> each arrived carrying all 32 heads.</p>
+<p>Then it got worse. Linear attention here is grouped-query: 16 q/k heads serve 48 value heads, so
+q and k get tiled 3x. The tiling factor was computed from the <em>declared</em> shape (16, correct) but
+applied to the <em>actual</em> tensor (32, wrong), producing 96 heads against 48 value heads. The op
+rejected it.</p>
+<p>The fix re-slices <code>q</code> and <code>k</code> on the head axis, exactly as <code>v</code> already was. It is a no-op when the
+declared width already matches the actual width, so models that normalize q and k separately -
+including Qwen3.5 and Qwen3.6 35B-A3B, which is why nobody had hit this - are untouched.</p>
+<p><strong>Worth internalising:</strong> the declared shape said 16 and the real tensor was 32. If you only look
+at the metadata, this bug is invisible. You have to compare declared against actual.</p>
+<h3>Fix 3 - a reshape that baked in the token count</h3>
+<p><figure class="fig"><svg class="diagram" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 680" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="680" fill="#ffffff"/>
+<defs><marker id="a5" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#8a93a0"/></marker></defs>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">Fix 3 - a reshape that baked in the token count</text>
+<text x="24" y="56" font-size="13" fill="#6b7480">Symptom: "Requested output shape [1,1,10,1024] is incompatible with input shape [1,1,42,5120]"</text>
+
+<!-- context -->
+<rect x="24" y="76" width="952" height="80" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="40" y="98" font-size="13" font-weight="600" fill="#2f6fb3">Background: one compiled model serves many token counts</text>
+<text x="40" y="120" font-size="12" fill="#1b1f24">ggml-openvino compiles an OpenVINO model whose token dimension is DYNAMIC, then replays it for a 42-token prompt,</text>
+<text x="40" y="137" font-size="12" fill="#1b1f24">a 2-token warmup, a 1-token decode step, and so on. So any shape written into the graph as a constant must not depend on T.</text>
+
+<!-- the reshape -->
+<text x="24" y="188" font-size="14" font-weight="600" fill="#1b1f24">The Hadamard rotation needs a reshape that SPLITS the token axis</text>
+
+<rect x="24" y="202" width="200" height="56" rx="5" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="124" y="224" font-size="12" font-weight="600" text-anchor="middle" fill="#1b1f24">input</text>
+<text x="124" y="244" font-size="12" font-family="ui-monospace, Consolas, monospace" text-anchor="middle" fill="#1b1f24">[T, 5120]</text>
+
+<path d="M 230 230 L 272 230" stroke="#8a93a0" stroke-width="2" marker-end="url(#a5)"/>
+<text x="251" y="222" font-size="10" text-anchor="middle" fill="#6b7480">reshape</text>
+
+<rect x="278" y="202" width="220" height="56" rx="5" fill="#fdf0dc" stroke="#c77c1e" stroke-width="1.5"/>
+<text x="388" y="224" font-size="12" font-weight="600" text-anchor="middle" fill="#1b1f24">1024-wide blocks</text>
+<text x="388" y="244" font-size="12" font-family="ui-monospace, Consolas, monospace" text-anchor="middle" fill="#1b1f24">[T * 5, 1024]</text>
+
+<text x="520" y="222" font-size="12" fill="#1b1f24">5120 / 1024 = 5, so the dynamic axis</text>
+<text x="520" y="240" font-size="12" fill="#1b1f24">does not keep its size: T becomes T*5.</text>
+<text x="520" y="258" font-size="12" font-weight="600" fill="#c0392b">That scaling is what broke the detection.</text>
+
+<!-- before -->
+<text x="24" y="300" font-size="14" font-weight="600" fill="#c0392b">BEFORE</text>
+<rect x="24" y="312" width="952" height="130" rx="6" fill="#fdecea" stroke="#c0392b" stroke-width="1.5"/>
+
+<text x="40" y="334" font-size="12" fill="#1b1f24">The decoder looks for the output axis that is "the dynamic one". Its rule was: find an axis with the SAME stride and the</text>
+<text x="40" y="351" font-size="12" fill="#1b1f24">SAME extent as the source dynamic axis. Here no axis has extent T (the axis is now T*5), so the rule found nothing.</text>
+
+<rect x="40" y="362" width="270" height="30" rx="4" fill="#ffffff" stroke="#8a93a0"/>
+<text x="175" y="381" font-size="11" text-anchor="middle" fill="#1b1f24">dynamic dim = -1 ("none found")</text>
+<path d="M 314 377 L 344 377" stroke="#8a93a0" stroke-width="2" marker-end="url(#a5)"/>
+<rect x="348" y="362" width="300" height="30" rx="4" fill="#ffffff" stroke="#8a93a0"/>
+<text x="498" y="381" font-size="11" text-anchor="middle" fill="#1b1f24">reshape target written as a full constant</text>
+<path d="M 652 377 L 682 377" stroke="#8a93a0" stroke-width="2" marker-end="url(#a5)"/>
+<rect x="686" y="362" width="274" height="30" rx="4" fill="#fdecea" stroke="#c0392b" stroke-width="1.5"/>
+<text x="823" y="381" font-size="11" font-family="ui-monospace, Consolas, monospace" font-weight="600" text-anchor="middle" fill="#c0392b">[1, 1, 10, 1024]</text>
+
+<text x="40" y="414" font-size="12" fill="#1b1f24">That 10 came from the 2-token warmup graph (2 * 5 = 10). Replay the same model with a 42-token prompt and the reshape</text>
+<text x="40" y="431" font-size="12" fill="#1b1f24">is asked to turn 42*5120 elements into 10*1024. Shape inference throws.</text>
+
+<!-- after -->
+<text x="24" y="480" font-size="14" font-weight="600" fill="#2d8a4e">AFTER</text>
+<rect x="24" y="492" width="952" height="130" rx="6" fill="#eaf5ee" stroke="#2d8a4e" stroke-width="1.5"/>
+
+<text x="40" y="514" font-size="12" fill="#1b1f24">Added a fallback that runs only when the old rule fails. It looks for the output axis that <tspan font-weight="600">spans the same elements</tspan>:</text>
+<text x="40" y="536" font-size="11.5" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">everything above axis i is static   AND   (elements up to and including i) == (same product in the source)</text>
+
+<rect x="40" y="548" width="270" height="30" rx="4" fill="#ffffff" stroke="#2d8a4e"/>
+<text x="175" y="567" font-size="11" text-anchor="middle" fill="#2d8a4e">dynamic dim = axis 2, found</text>
+<path d="M 314 563 L 344 563" stroke="#8a93a0" stroke-width="2" marker-end="url(#a5)"/>
+<rect x="348" y="548" width="300" height="30" rx="4" fill="#ffffff" stroke="#8a93a0"/>
+<text x="498" y="567" font-size="11" text-anchor="middle" fill="#1b1f24">that axis is written as -1, not a number</text>
+<path d="M 652 563 L 682 563" stroke="#8a93a0" stroke-width="2" marker-end="url(#a5)"/>
+<rect x="686" y="548" width="274" height="30" rx="4" fill="#eaf5ee" stroke="#2d8a4e" stroke-width="1.5"/>
+<text x="823" y="567" font-size="11" font-family="ui-monospace, Consolas, monospace" font-weight="600" text-anchor="middle" fill="#2d8a4e">[1, 1, -1, 1024]</text>
+
+<text x="40" y="598" font-size="12" fill="#1b1f24">Now the same compiled model is correct for any T. This fix is fully general - nothing about it is ternary- or Bonsai-specific,</text>
+<text x="40" y="615" font-size="12" fill="#1b1f24">and it closes a whole latent class of bugs: any reshape that splits or merges the dynamic axis had the same problem.</text>
+
+<text x="24" y="652" font-size="11" fill="#6b7480">Files: ggml/src/ggml-openvino/openvino/op/reshape.cpp (op_case 0 now honours get_op_dynamic_dim) and ggml-decoder.cpp (the span fallback).</text>
+</svg>
+</figure></p>
+<p>The OpenVINO backend compiles a model whose <strong>token dimension is dynamic</strong>, then replays that one
+compiled model for a 42-token prompt, a 2-token warmup, a 1-token decode step, and so on. So no
+shape written into the graph as a constant may depend on the token count <code>T</code>.</p>
+<p>The backend works out which output axis of a reshape is "the dynamic one" so it can write <code>-1</code>
+there instead of a number. Its rule was: find the axis with the same stride <em>and the same extent</em>
+as the source's dynamic axis.</p>
+<p>The Hadamard rotation breaks that rule, because its reshape <strong>splits</strong> the token axis:
+<code>[T, 5120]</code> becomes <code>[T*5, 1024]</code>. No output axis has extent <code>T</code> any more - it has extent <code>T*5</code>.
+So the rule found nothing, the whole target shape was written as a constant, and the number baked
+in came from whichever graph was captured first (a 2-token warmup, giving <code>[1,1,10,1024]</code>).
+Replaying with 42 tokens then threw a shape error.</p>
+<p>The fix adds a fallback that runs only when the old rule fails: find the output axis that <em>spans
+the same elements</em> - everything above it static, and the same element count up to and including
+it. This is fully general; nothing about it is ternary- or Bonsai-specific, and it closes a latent
+class of bugs affecting any reshape that splits or merges the dynamic axis.</p>
+<h3>Fix 4 - keep ternary weights out of requantization</h3>
+<p>The backend requantized <code>token_embd.weight</code> and <code>output.weight</code> to 8-bit unconditionally. Every
+requantization target is 4-bit or wider, so on a ternary model this can only make things worse.
+Return "no requantization" for PQ2_0 and move on.</p>
+<hr /></section><section class="panel" role="tabpanel" id="tab-6-6-the-debugging-lesson" aria-labelledby="btn-tab-6-6-the-debugging-lesson" hidden><h2>6. The debugging lesson</h2><p><figure class="fig"><svg class="diagram" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="700" fill="#ffffff"/>
+<defs><marker id="a6" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker></defs>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">The one debugging lesson worth keeping</text>
+<text x="24" y="56" font-size="13" fill="#6b7480">The reshape bug (fix 3) did not just break shapes. Four steps later it surfaced as a completely unrelated-looking error.</text>
+
+<!-- chain -->
+<rect x="90" y="80" width="520" height="52" rx="6" fill="#fdf0dc" stroke="#c77c1e" stroke-width="2"/>
+<text x="350" y="101" font-size="13" font-weight="600" text-anchor="middle" fill="#a8641a">ROOT CAUSE - the reshape target was a constant</text>
+<text x="350" y="120" font-size="11.5" font-family="ui-monospace, Consolas, monospace" text-anchor="middle" fill="#1b1f24">[1, 1, 10, 1024]  instead of  [1, 1, -1, 1024]</text>
+<path d="M 350 132 L 350 154" stroke="#c0392b" stroke-width="2" marker-end="url(#a6)"/>
+
+<rect x="90" y="158" width="520" height="46" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="350" y="178" font-size="12.5" text-anchor="middle" fill="#1b1f24">a constant shape propagates forward</text>
+<text x="350" y="196" font-size="11.5" text-anchor="middle" fill="#6b7480">the FFN matmul's input partial shape becomes fully STATIC</text>
+<path d="M 350 204 L 350 226" stroke="#c0392b" stroke-width="2" marker-end="url(#a6)"/>
+
+<rect x="90" y="230" width="520" height="56" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="350" y="250" font-size="12.5" text-anchor="middle" fill="#1b1f24">FullyConnectedHorizontalFusion bails out</text>
+<text x="350" y="268" font-size="11.5" font-family="ui-monospace, Consolas, monospace" text-anchor="middle" fill="#c0392b">if (!fc-&gt;get_input_partial_shape(0).is_dynamic()) return false;</text>
+<text x="350" y="282" font-size="11" text-anchor="middle" fill="#6b7480">the pass only targets dynamic generative models</text>
+<path d="M 350 286 L 350 308" stroke="#c0392b" stroke-width="2" marker-end="url(#a6)"/>
+
+<rect x="90" y="312" width="520" height="46" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="350" y="332" font-size="12.5" text-anchor="middle" fill="#1b1f24">ffn_gate and ffn_up are NOT merged into one matmul</text>
+<text x="350" y="350" font-size="11.5" text-anchor="middle" fill="#6b7480">so ffn_gate stays a separate node with its own fused chain</text>
+<path d="M 350 358 L 350 380" stroke="#c0392b" stroke-width="2" marker-end="url(#a6)"/>
+
+<rect x="90" y="384" width="520" height="64" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="350" y="404" font-size="12.5" text-anchor="middle" fill="#1b1f24">ffn_gate ends up with THREE fused eltwise ops</text>
+<text x="350" y="422" font-size="11.5" text-anchor="middle" fill="#1b1f24">swish  +  multiply by up  +  multiply by the next layer's Hadamard signs</text>
+<text x="350" y="440" font-size="11" text-anchor="middle" fill="#6b7480">the kernel's epilogue table only knows chains of length 1 or 2</text>
+<path d="M 350 448 L 350 470" stroke="#c0392b" stroke-width="2" marker-end="url(#a6)"/>
+
+<rect x="90" y="474" width="520" height="46" rx="6" fill="#fdecea" stroke="#c0392b" stroke-width="1.5"/>
+<text x="350" y="494" font-size="12.5" text-anchor="middle" fill="#c0392b">ternocl_int2 rejects the node: "fused chain has no folded epilogue"</text>
+<text x="350" y="512" font-size="11.5" text-anchor="middle" fill="#6b7480">normally a reject is harmless - another implementation takes over</text>
+<path d="M 350 520 L 350 542" stroke="#c0392b" stroke-width="2" marker-end="url(#a6)"/>
+
+<rect x="90" y="546" width="520" height="64" rx="6" fill="#fdecea" stroke="#c0392b" stroke-width="2"/>
+<text x="350" y="566" font-size="13" font-weight="600" text-anchor="middle" fill="#c0392b">THE ERROR YOU ACTUALLY SEE</text>
+<text x="350" y="586" font-size="11" font-family="ui-monospace, Consolas, monospace" text-anchor="middle" fill="#1b1f24">"carries a Hadamard input transform but the TernOCL impl</text>
+<text x="350" y="601" font-size="11" font-family="ui-monospace, Consolas, monospace" text-anchor="middle" fill="#1b1f24">rejected it: fused chain has no folded epilogue"</text>
+
+<!-- side note -->
+<rect x="636" y="474" width="340" height="136" rx="6" fill="#fdf7ee" stroke="#c77c1e" stroke-width="1.5"/>
+<text x="652" y="496" font-size="12.5" font-weight="600" fill="#a8641a">Why it becomes fatal, not a fallback</text>
+<text x="652" y="518" font-size="11.5" fill="#1b1f24">This matmul had its Hadamard rotation folded in</text>
+<text x="652" y="535" font-size="11.5" fill="#1b1f24">(diagram 04). TernOCL is the only implementation</text>
+<text x="652" y="552" font-size="11.5" fill="#1b1f24">that applies that rotation. Falling back to oneDNN</text>
+<text x="652" y="569" font-size="11.5" fill="#1b1f24">would silently skip it and produce garbage, so the</text>
+<text x="652" y="586" font-size="11.5" fill="#1b1f24">plugin escalates the reject to a build failure.</text>
+<text x="652" y="603" font-size="11.5" font-weight="600" fill="#2d8a4e">Loud failure instead of silent wrong answers.</text>
+
+<!-- lesson -->
+<rect x="636" y="158" width="340" height="286" rx="6" fill="#eaf5ee" stroke="#2d8a4e" stroke-width="2"/>
+<text x="652" y="182" font-size="13" font-weight="600" fill="#2d8a4e">The lesson</text>
+<text x="652" y="206" font-size="12" fill="#1b1f24">The error names the <tspan font-weight="600">epilogue</tspan> and the</text>
+<text x="652" y="223" font-size="12" fill="#1b1f24"><tspan font-weight="600">Hadamard transform</tspan>. Neither is broken.</text>
+<text x="652" y="248" font-size="12" fill="#1b1f24">Chasing it directly leads you into the kernel's</text>
+<text x="652" y="265" font-size="12" fill="#1b1f24">acceptance rules, five steps away from the bug.</text>
+<text x="652" y="296" font-size="12" font-weight="600" fill="#2d8a4e">Rule of thumb:</text>
+<text x="652" y="316" font-size="12" fill="#1b1f24">when a GPU-plugin fusion "mysteriously" does</text>
+<text x="652" y="333" font-size="12" fill="#1b1f24">not fire, check whether the shapes are still</text>
+<text x="652" y="350" font-size="12" fill="#1b1f24">dynamic BEFORE looking at the pattern matcher.</text>
+<text x="652" y="378" font-size="12" fill="#1b1f24">Many passes silently require dynamic shapes,</text>
+<text x="652" y="395" font-size="12" fill="#1b1f24">because they only target generative models.</text>
+<text x="652" y="422" font-size="11.5" fill="#6b7480">Fixing the reshape made the merge fire and this</text>
+<text x="652" y="438" font-size="11.5" fill="#6b7480">entire cascade disappear at once.</text>
+
+<text x="24" y="652" font-size="11.5" fill="#1b1f24">Evidence that the merge was the missing piece: after fix 3, OV_TERNOCL_INT2_DEBUG=1 reports the accepted nodes as</text>
+<text x="24" y="670" font-size="11.5" font-family="ui-monospace, Consolas, monospace" fill="#2d8a4e">ffn_gate_fused_2FCs      z_fused_2FCs      Qcur_full_fused_3FCs</text>
+<text x="24" y="688" font-size="11.5" fill="#6b7480">- the "_fused_NFCs" suffix is the horizontal fusion naming its merged result.</text>
+</svg>
+</figure></p>
+<p>This is the most transferable thing in the whole project, so it gets its own diagram.</p>
+<p>Fix 3 (the baked reshape) did not announce itself as a shape bug. It surfaced, four steps later,
+as this:</p>
+<pre><code>[GPU] ternocl int2: ...ffn_gate... carries a Hadamard input transform
+      but the TernOCL impl rejected it: fused chain has no folded epilogue
+</code></pre>
+<p>Nothing in that message is wrong, and nothing it names is broken. The causal chain was:</p>
+<ol>
+<li>The reshape target was a constant, so the shape downstream became <strong>static</strong>.</li>
+<li><code>FullyConnectedHorizontalFusion</code> - the pass that merges <code>ffn_gate</code> and <code>ffn_up</code> into one
+   matmul - starts with <code>if (!input_shape.is_dynamic()) return false;</code>. It silently bailed.</li>
+<li>So <code>ffn_gate</code> stayed a separate node and accumulated <strong>three</strong> fused element-wise ops
+   (the SiLU, the multiply by <code>up</code>, and the next layer's Hadamard sign multiply).</li>
+<li>The ternary kernel's epilogue table only knows chains of length 1 or 2. It rejected the node.</li>
+<li>Normally a rejection is harmless - another implementation takes over. But this matmul had its
+   Hadamard rotation folded in, and the ternary kernel is the <em>only</em> implementation that applies
+   that rotation. Falling back would silently produce garbage, so the plugin <strong>escalates the
+   rejection to a hard build failure</strong> on purpose.</li>
+</ol>
+<p>Chasing the error message leads into the kernel's acceptance rules, five steps from the cause.
+Fixing the reshape made the merge fire and the entire cascade vanish at once.</p>
+<blockquote>
+<p><strong>Rule of thumb:</strong> when a GPU-plugin fusion mysteriously does not fire, check whether the shapes
+are still dynamic <em>before</em> studying the pattern matcher. Several passes silently require dynamic
+shapes, because they only target generative models.</p>
+</blockquote>
+<p>The confirmation that the merge was the missing piece: after fix 3, the kernel's debug output
+names the accepted nodes <code>ffn_gate_fused_2FCs</code>, <code>z_fused_2FCs</code>, <code>Qcur_full_fused_3FCs</code> - the
+<code>_fused_NFCs</code> suffix is the horizontal fusion naming its merged result.</p>
+<hr /></section><section class="panel" role="tabpanel" id="tab-7-7-how-one-compiled-model-uses-two-differ" aria-labelledby="btn-tab-7-7-how-one-compiled-model-uses-two-differ" hidden><h2>7. How one compiled model uses two different kernels</h2><p><figure class="fig"><svg class="diagram" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 620" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="620" fill="#ffffff"/>
+<defs><marker id="a7" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#8a93a0"/></marker></defs>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">How one compiled model uses different kernels for prefill and decode</text>
+<text x="24" y="56" font-size="13" fill="#6b7480">There is no "prefill model" and no "decode model". The choice happens per inference call, inside the matmul primitive.</text>
+
+<!-- flow -->
+<rect x="24" y="78" width="232" height="52" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="140" y="99" font-size="12" font-weight="600" text-anchor="middle" fill="#1b1f24">ONE compiled OV model</text>
+<text x="140" y="118" font-size="11" text-anchor="middle" fill="#6b7480">token dimension is dynamic</text>
+<path d="M 260 104 L 292 104" stroke="#8a93a0" stroke-width="2" marker-end="url(#a7)"/>
+
+<rect x="296" y="78" width="252" height="52" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="422" y="99" font-size="12" font-weight="600" text-anchor="middle" fill="#2f6fb3">execute_impl runs, per call</text>
+<text x="422" y="118" font-size="10.5" font-family="ui-monospace, Consolas, monospace" text-anchor="middle" fill="#1b1f24">M = output_shape elems / N</text>
+<path d="M 552 104 L 584 104" stroke="#8a93a0" stroke-width="2" marker-end="url(#a7)"/>
+
+<rect x="588" y="78" width="212" height="52" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+<text x="694" y="99" font-size="12" font-weight="600" text-anchor="middle" fill="#1b1f24">launch_class(M)</text>
+<text x="694" y="118" font-size="11" text-anchor="middle" fill="#6b7480">buckets M into 8 classes</text>
+<path d="M 804 104 L 836 104" stroke="#8a93a0" stroke-width="2" marker-end="url(#a7)"/>
+
+<rect x="840" y="78" width="136" height="52" rx="6" fill="#eaf5ee" stroke="#2d8a4e" stroke-width="1.5"/>
+<text x="908" y="99" font-size="12" font-weight="600" text-anchor="middle" fill="#2d8a4e">cached kernel</text>
+<text x="908" y="118" font-size="10.5" text-anchor="middle" fill="#6b7480">built on first use</text>
+
+<!-- table -->
+<text x="24" y="168" font-size="14" font-weight="600" fill="#1b1f24">The 8 launch classes</text>
+<rect x="24" y="180" width="952" height="212" rx="6" fill="#f7f9fb" stroke="#8a93a0"/>
+<line x1="24" y1="208" x2="976" y2="208" stroke="#8a93a0"/>
+<line x1="120" y1="180" x2="120" y2="392" stroke="#8a93a0"/>
+<line x1="236" y1="180" x2="236" y2="392" stroke="#8a93a0"/>
+<line x1="520" y1="180" x2="520" y2="392" stroke="#8a93a0"/>
+<line x1="700" y1="180" x2="700" y2="392" stroke="#8a93a0"/>
+
+<text x="72" y="200" font-size="11.5" font-weight="600" text-anchor="middle" fill="#6b7480">class</text>
+<text x="178" y="200" font-size="11.5" font-weight="600" text-anchor="middle" fill="#6b7480">M (tokens)</text>
+<text x="378" y="200" font-size="11.5" font-weight="600" text-anchor="middle" fill="#6b7480">OpenCL kernel</text>
+<text x="610" y="200" font-size="11.5" font-weight="600" text-anchor="middle" fill="#6b7480">shape</text>
+<text x="838" y="200" font-size="11.5" font-weight="600" text-anchor="middle" fill="#6b7480">when it is used</text>
+
+<rect x="24" y="208" width="952" height="76" fill="#e4f1ef" opacity="0.5"/>
+<text x="72" y="226" font-size="11.5" text-anchor="middle" fill="#1b1f24">0</text><text x="178" y="226" font-size="11.5" text-anchor="middle" fill="#1b1f24">M = 1</text>
+<text x="72" y="245" font-size="11.5" text-anchor="middle" fill="#1b1f24">1</text><text x="178" y="245" font-size="11.5" text-anchor="middle" fill="#1b1f24">M = 2</text>
+<text x="72" y="264" font-size="11.5" text-anchor="middle" fill="#1b1f24">2</text><text x="178" y="264" font-size="11.5" text-anchor="middle" fill="#1b1f24">M &lt;= 4</text>
+<text x="72" y="281" font-size="11.5" text-anchor="middle" fill="#1b1f24">3</text><text x="178" y="281" font-size="11.5" text-anchor="middle" fill="#1b1f24">M &lt;= 8</text>
+<text x="248" y="245" font-size="11.5" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">int2_fp16_upcvt_gemm</text>
+<text x="248" y="263" font-size="11" fill="#6b7480">(tile param SGM = 1 / 2 / 4 / 8)</text>
+<text x="610" y="245" font-size="11.5" text-anchor="middle" fill="#1b1f24">GEMV</text>
+<text x="610" y="263" font-size="10.5" text-anchor="middle" fill="#6b7480">tall-skinny</text>
+<text x="838" y="245" font-size="11.5" font-weight="600" text-anchor="middle" fill="#2a8c82">DECODE</text>
+<text x="838" y="263" font-size="10.5" text-anchor="middle" fill="#6b7480">one token at a time</text>
+
+<text x="72" y="306" font-size="11.5" text-anchor="middle" fill="#1b1f24">4</text><text x="178" y="306" font-size="11.5" text-anchor="middle" fill="#1b1f24">M &lt;= 16</text>
+<text x="72" y="325" font-size="11.5" text-anchor="middle" fill="#1b1f24">5</text><text x="178" y="325" font-size="11.5" text-anchor="middle" fill="#1b1f24">M &lt;= 32</text>
+<text x="72" y="344" font-size="11.5" text-anchor="middle" fill="#1b1f24">6</text><text x="178" y="344" font-size="11.5" text-anchor="middle" fill="#1b1f24">M &lt; 64</text>
+<text x="72" y="363" font-size="11.5" text-anchor="middle" fill="#1b1f24">7</text><text x="178" y="363" font-size="11.5" text-anchor="middle" fill="#1b1f24">M &gt;= 64</text>
+<text x="248" y="316" font-size="11.5" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">int2_fp16_upcvt_gemm_mt</text>
+<text x="248" y="340" font-size="11.5" font-family="ui-monospace, Consolas, monospace" fill="#c77c1e">int2_int8_gemm_mt</text>
+<text x="248" y="356" font-size="10.5" fill="#c77c1e">only with INT8_PREFILL=1</text>
+<text x="610" y="325" font-size="11.5" text-anchor="middle" fill="#1b1f24">tiled GEMM</text>
+<text x="610" y="343" font-size="10.5" text-anchor="middle" fill="#6b7480">MT_M x MT_N tiles</text>
+<text x="838" y="325" font-size="11.5" font-weight="600" text-anchor="middle" fill="#a8641a">PREFILL</text>
+<text x="838" y="343" font-size="10.5" text-anchor="middle" fill="#6b7480">many tokens at once</text>
+
+<!-- two families -->
+<text x="24" y="428" font-size="14" font-weight="600" fill="#1b1f24">The two GEMM families read the SAME packed weights, but move the work around</text>
+
+<rect x="24" y="442" width="468" height="120" rx="6" fill="#e4f1ef" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="40" y="464" font-size="12.5" font-weight="600" fill="#2a8c82">int2 x f16 up-convert   (default, all M)</text>
+<text x="40" y="486" font-size="11.5" fill="#1b1f24">dequantize the 2-bit codes to fp16 in registers,</text>
+<text x="40" y="503" font-size="11.5" fill="#1b1f24">then fp16 DPAS, fp32 accumulate.</text>
+<text x="40" y="526" font-size="11.5" fill="#6b7480">Activations stay in their native fp16 - no extra error.</text>
+<text x="40" y="548" font-size="11.5" fill="#1b1f24">Cost: the dequantize work, every tile.</text>
+
+<rect x="508" y="442" width="468" height="120" rx="6" fill="#fdf7ee" stroke="#c77c1e" stroke-width="1.5"/>
+<text x="524" y="464" font-size="12.5" font-weight="600" fill="#a8641a">int2 x int8 DPAS   (M &gt; 8, opt-in)</text>
+<text x="524" y="486" font-size="11.5" fill="#1b1f24">weights are NEVER unpacked - raw codes feed a native</text>
+<text x="524" y="503" font-size="11.5" fill="#1b1f24">s8 x s2 DPAS, int32 accumulate.</text>
+<text x="524" y="526" font-size="11.5" fill="#1b1f24">Instead the ACTIVATIONS are quantized to int8 per</text>
+<text x="524" y="543" font-size="11.5" fill="#1b1f24">(row, 128-group). Faster, but adds a little error.</text>
+
+<text x="24" y="592" font-size="11.5" fill="#6b7480">Each primitive lazily clBuildProgram-s a kernel the first time it sees a given class, keeps it in a _launch[8] array, and reuses it after.</text>
+<text x="24" y="609" font-size="11.5" fill="#6b7480">So a single matmul node accumulates a handful of kernels over the process lifetime and picks among them by the runtime token count.</text>
+</svg>
+</figure></p>
+<p>A natural question: if prefill and decode run on the same compiled model, how can they use
+different kernels?</p>
+<p>They can because <strong>the kernel is not chosen at compile time</strong>. Inside the matmul primitive, on
+every inference call:</p>
+<pre><code class="language-cpp">const size_t M = ov::shape_size(params-&gt;output_layouts[0].get_shape()) / _N;  // tokens, at run time
+if (M &gt; 8 &amp;&amp; int8_prefill_enabled())
+    return execute_int8(...);
+auto&amp; l = get_launch(M);
+</code></pre>
+<p><code>launch_class(M)</code> buckets the token count into 8 classes. <code>get_launch</code> returns the cached kernel
+for that class, or builds it with <code>clBuildProgram</code> on first use and keeps it in an 8-slot array.
+So a single matmul node accumulates a handful of OpenCL kernels over the process lifetime and
+picks among them per call:</p>
+<ul>
+<li><strong>M &lt;= 8</strong> (decode): a GEMV, tuned for one or a few tokens.</li>
+<li><strong>M &gt; 8</strong> (prefill): a tiled GEMM.</li>
+</ul>
+<p>Both read the <em>same</em> packed weights, but move the work around differently:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>weights</th>
+<th>activations</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>int2 x f16 up-convert</strong> (default)</td>
+<td>dequantized to fp16 in registers, then fp16 matrix instructions</td>
+<td>stay in native fp16 - no extra error</td>
+</tr>
+<tr>
+<td><strong>int2 x int8</strong> (<code>OV_TERNOCL_INT2_INT8_PREFILL=1</code>, prefill only)</td>
+<td>never unpacked - raw 2-bit codes feed a native int8 x int2 matrix instruction</td>
+<td>quantized to int8 per (row, 128-group) - faster, slightly lossy</td>
+</tr>
+</tbody>
+</table>
+<h3>What <code>OV_TERNOCL_INT2_INT8_PREFILL=1</code> actually does</h3>
+<p>It is <strong>off by default</strong>, and it changes only how the <em>prompt</em> is processed - the weights on disk
+are untouched and decode is unaffected.</p>
+<p>By default the ternary kernel <strong>up-converts</strong>: it unpacks each 2-bit code to fp16 in registers and
+runs fp16 matrix instructions against fp16 activations. Correct, lossless on the activation side,
+but it spends the GPU's fp16 matrix throughput on operands that only ever hold three distinct
+values.</p>
+<p>With the switch on, prefill instead takes the <strong>int2 x int8 DPAS</strong> path:</p>
+<ul>
+<li>the weights are <strong>never unpacked</strong> - the raw 2-bit codes feed the matrix instruction directly;</li>
+<li>the <strong>activations</strong> are quantized to int8, one scale per (row, 128-group);</li>
+<li>the hardware's integer matrix instruction runs at a higher rate than the fp16 one.</li>
+</ul>
+<p>It only engages where it pays off - <code>M &gt; 8</code>, i.e. a prompt or a batch, never the <code>M = 1</code> decode
+step (see the dispatch snippet above). That is why every int8 row in the results is a prefill
+number and the decode column is blank.</p>
+<p><strong>The trade is accuracy for prompt speed.</strong> Quantizing activations to int8 is lossy in a way the
+default path is not. On this model it was harmless - default and <code>INT8_PREFILL=1</code> were
+byte-identical over 90 greedy tokens here, and the PR author reports GSM8K within the standard
+error of the default. It is still the reason the switch is opt-in rather than the default: that is
+the PR author's call to make, and it needs a real accuracy harness rather than a 90-token diff.</p>
+<p>Measured here: <strong>pp128 236 -&gt; 549 t/s (2.3x)</strong> and <strong>pp512 535 -&gt; 580 t/s (1.08x)</strong>. The gain is
+much larger at short prompts because at pp512 the default path is already close to saturating the
+machine, so there is less headroom left to recover.</p>
+<hr /></section><section class="panel" role="tabpanel" id="tab-8-8-results" aria-labelledby="btn-tab-8-8-results" hidden><h2>8. Results</h2><p><figure class="fig"><svg class="diagram" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 780" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="780" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">Measured results - Bonsai 2 27B PQ2_0 (2026-10-17)</text>
+<text x="24" y="56" font-size="13" fill="#6b7480">Intel Arc B390 iGPU (Xe3), identical GPU and model file. Decode measured with -n alone, prefill with -p. Higher is better.</text>
+<rect x="24" y="72" width="14" height="14" rx="2" fill="#6b4fa8"/>
+<text x="44" y="84" font-size="11.5" fill="#1b1f24">native OpenVINO (ceiling)</text>
+<rect x="256" y="72" width="14" height="14" rx="2" fill="#2f6fb3"/>
+<text x="276" y="84" font-size="11.5" fill="#1b1f24">ggml-openvino (this work)</text>
+<rect x="488" y="72" width="14" height="14" rx="2" fill="#c77c1e"/>
+<text x="508" y="84" font-size="11.5" fill="#1b1f24">ggml-vulkan</text>
+<rect x="720" y="72" width="14" height="14" rx="2" fill="#2d8a4e"/>
+<text x="740" y="84" font-size="11.5" fill="#1b1f24">int8 prefill variant</text>
+<text x="24" y="124" font-size="14" font-weight="600" fill="#1b1f24">Prefill, 512-token prompt  (t/s)</text>
+<line x1="215" y1="136" x2="215" y2="280" stroke="#8a93a0"/>
+<text x="205" y="150" font-size="11.5" text-anchor="end" fill="#1b1f24">native OV int8</text>
+<rect x="216" y="136" width="693.4" height="19" rx="4" fill="#2d8a4e"/>
+<rect x="216" y="136" width="6.0" height="19" fill="#2d8a4e"/>
+<text x="917.4" y="150" font-size="11.5" font-weight="600" fill="#1b1f24">693.4</text>
+<text x="205" y="174" font-size="11.5" text-anchor="end" fill="#1b1f24">native OV</text>
+<rect x="216" y="160" width="638.5" height="19" rx="4" fill="#6b4fa8"/>
+<rect x="216" y="160" width="6.0" height="19" fill="#6b4fa8"/>
+<text x="862.5" y="174" font-size="11.5" font-weight="600" fill="#1b1f24">638.5</text>
+<text x="205" y="198" font-size="11.5" text-anchor="end" fill="#1b1f24">ggml-ov int8</text>
+<rect x="216" y="184" width="579.7" height="19" rx="4" fill="#2d8a4e"/>
+<rect x="216" y="184" width="6.0" height="19" fill="#2d8a4e"/>
+<text x="803.7" y="198" font-size="11.5" font-weight="600" fill="#1b1f24">579.7</text>
+<text x="205" y="222" font-size="11.5" text-anchor="end" fill="#1b1f24">ggml-openvino</text>
+<rect x="216" y="208" width="535.1" height="19" rx="4" fill="#2f6fb3"/>
+<rect x="216" y="208" width="6.0" height="19" fill="#2f6fb3"/>
+<text x="759.1" y="222" font-size="11.5" font-weight="600" fill="#1b1f24">535.1</text>
+<text x="205" y="246" font-size="11.5" text-anchor="end" fill="#1b1f24">ggml-ov before</text>
+<rect x="216" y="232" width="527.3" height="19" rx="4" fill="#c7cdd6"/>
+<rect x="216" y="232" width="6.0" height="19" fill="#c7cdd6"/>
+<text x="751.3" y="246" font-size="11.5" font-weight="600" fill="#1b1f24">527.3</text>
+<text x="205" y="270" font-size="11.5" text-anchor="end" fill="#1b1f24">vulkan</text>
+<rect x="216" y="256" width="169.5" height="19" rx="4" fill="#c77c1e"/>
+<rect x="216" y="256" width="6.0" height="19" fill="#c77c1e"/>
+<text x="393.5" y="270" font-size="11.5" font-weight="600" fill="#1b1f24">169.5</text>
+<text x="24" y="314" font-size="14" font-weight="600" fill="#1b1f24">Prefill, 128-token prompt  (t/s)</text>
+<line x1="215" y1="326" x2="215" y2="470" stroke="#8a93a0"/>
+<text x="205" y="340" font-size="11.5" text-anchor="end" fill="#1b1f24">native OV int8</text>
+<rect x="216" y="326" width="616.3" height="19" rx="4" fill="#2d8a4e"/>
+<rect x="216" y="326" width="6.0" height="19" fill="#2d8a4e"/>
+<text x="840.3" y="340" font-size="11.5" font-weight="600" fill="#1b1f24">616.3</text>
+<text x="205" y="364" font-size="11.5" text-anchor="end" fill="#1b1f24">ggml-ov int8</text>
+<rect x="216" y="350" width="549.0" height="19" rx="4" fill="#2d8a4e"/>
+<rect x="216" y="350" width="6.0" height="19" fill="#2d8a4e"/>
+<text x="773.0" y="364" font-size="11.5" font-weight="600" fill="#1b1f24">549</text>
+<text x="205" y="388" font-size="11.5" text-anchor="end" fill="#1b1f24">native OV</text>
+<rect x="216" y="374" width="241.2" height="19" rx="4" fill="#6b4fa8"/>
+<rect x="216" y="374" width="6.0" height="19" fill="#6b4fa8"/>
+<text x="465.2" y="388" font-size="11.5" font-weight="600" fill="#1b1f24">241.2</text>
+<text x="205" y="412" font-size="11.5" text-anchor="end" fill="#1b1f24">ggml-openvino</text>
+<rect x="216" y="398" width="236.1" height="19" rx="4" fill="#2f6fb3"/>
+<rect x="216" y="398" width="6.0" height="19" fill="#2f6fb3"/>
+<text x="460.1" y="412" font-size="11.5" font-weight="600" fill="#1b1f24">236.1</text>
+<text x="205" y="436" font-size="11.5" text-anchor="end" fill="#1b1f24">ggml-ov before</text>
+<rect x="216" y="422" width="232.2" height="19" rx="4" fill="#c7cdd6"/>
+<rect x="216" y="422" width="6.0" height="19" fill="#c7cdd6"/>
+<text x="456.2" y="436" font-size="11.5" font-weight="600" fill="#1b1f24">232.2</text>
+<text x="205" y="460" font-size="11.5" text-anchor="end" fill="#1b1f24">vulkan</text>
+<rect x="216" y="446" width="171.2" height="19" rx="4" fill="#c77c1e"/>
+<rect x="216" y="446" width="6.0" height="19" fill="#c77c1e"/>
+<text x="395.2" y="460" font-size="11.5" font-weight="600" fill="#1b1f24">171.2</text>
+<text x="24" y="504" font-size="14" font-weight="600" fill="#1b1f24">Decode, 128 tokens  (t/s)</text>
+<line x1="215" y1="516" x2="215" y2="612" stroke="#8a93a0"/>
+<text x="205" y="530" font-size="11.5" text-anchor="end" fill="#1b1f24">native OV</text>
+<rect x="216" y="516" width="676.4" height="19" rx="4" fill="#6b4fa8"/>
+<rect x="216" y="516" width="6.0" height="19" fill="#6b4fa8"/>
+<text x="900.4" y="530" font-size="11.5" font-weight="600" fill="#1b1f24">15.03</text>
+<text x="205" y="554" font-size="11.5" text-anchor="end" fill="#1b1f24">ggml-openvino</text>
+<rect x="216" y="540" width="605.7" height="19" rx="4" fill="#2f6fb3"/>
+<rect x="216" y="540" width="6.0" height="19" fill="#2f6fb3"/>
+<text x="829.7" y="554" font-size="11.5" font-weight="600" fill="#1b1f24">13.46</text>
+<text x="205" y="578" font-size="11.5" text-anchor="end" fill="#1b1f24">vulkan</text>
+<rect x="216" y="564" width="571.5" height="19" rx="4" fill="#c77c1e"/>
+<rect x="216" y="564" width="6.0" height="19" fill="#c77c1e"/>
+<text x="795.5" y="578" font-size="11.5" font-weight="600" fill="#1b1f24">12.7</text>
+<text x="205" y="602" font-size="11.5" text-anchor="end" fill="#1b1f24">ggml-ov before</text>
+<rect x="216" y="588" width="550.8" height="19" rx="4" fill="#c7cdd6"/>
+<rect x="216" y="588" width="6.0" height="19" fill="#c7cdd6"/>
+<text x="774.8" y="602" font-size="11.5" font-weight="600" fill="#1b1f24">12.24</text>
+<rect x="24" y="638" width="952" height="96" rx="6" fill="#f7f9fb"/>
+<text x="40" y="663" font-size="13" font-weight="600" fill="#1b1f24">This session</text>
+<text x="40" y="686" font-size="12.5" fill="#1b1f24">Decode 12.24 -> 13.46 t/s (+10.0%), and the gap to the native-OpenVINO ceiling closed from 1.22x to 1.12x.</text>
+<text x="40" y="706" font-size="12.5" fill="#1b1f24">Prefill is unchanged by this work; ggml-openvino is 3.16x ggml-vulkan at pp512 (3.42x with int8 prefill).</text>
+<text x="40" y="726" font-size="11.5" fill="#6b7480">The native-OpenVINO rows are paged_bench_llm_27b, the PR's PagedAttention tool - not openvino_genai.LLMPipeline, which was never run.</text>
+</svg></figure></p>
+<p>Intel Arc B390 iGPU, same GPU and same model file for every row. Decode measured with <code>-n</code> alone
+and prefill with <code>-p</code> - see the measurement note below, which is not a formality.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th style="text-align: right;">pp128</th>
+<th style="text-align: right;">pp512</th>
+<th style="text-align: right;">tg32</th>
+<th style="text-align: right;">tg128</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>native OpenVINO</strong> (<code>paged_bench_llm_27b</code>)</td>
+<td style="text-align: right;">241.2</td>
+<td style="text-align: right;"><strong>638.5</strong></td>
+<td style="text-align: right;"><strong>14.90</strong></td>
+<td style="text-align: right;"><strong>15.03</strong></td>
+</tr>
+<tr>
+<td><strong>native OpenVINO</strong>, <code>INT8_PREFILL=1</code></td>
+<td style="text-align: right;"><strong>616.3</strong></td>
+<td style="text-align: right;"><strong>693.4</strong></td>
+<td style="text-align: right;">-</td>
+<td style="text-align: right;">-</td>
+</tr>
+<tr>
+<td><strong>ggml-openvino</strong> + ternary kernels</td>
+<td style="text-align: right;">236.1</td>
+<td style="text-align: right;">535.1</td>
+<td style="text-align: right;">13.45</td>
+<td style="text-align: right;">13.46</td>
+</tr>
+<tr>
+<td><strong>ggml-openvino</strong>, <code>INT8_PREFILL=1</code></td>
+<td style="text-align: right;">549.0</td>
+<td style="text-align: right;">579.7</td>
+<td style="text-align: right;">-</td>
+<td style="text-align: right;">-</td>
+</tr>
+<tr>
+<td>ggml-openvino, before the 2026-10-17 work</td>
+<td style="text-align: right;">232.2</td>
+<td style="text-align: right;">527.3</td>
+<td style="text-align: right;">12.27</td>
+<td style="text-align: right;">12.24</td>
+</tr>
+<tr>
+<td><strong>ggml-vulkan</strong></td>
+<td style="text-align: right;">171.2</td>
+<td style="text-align: right;">169.5</td>
+<td style="text-align: right;">12.70</td>
+<td style="text-align: right;">12.70</td>
+</tr>
+<tr>
+<td>ggml-openvino, ternary kernels off</td>
+<td style="text-align: right;">1.4</td>
+<td style="text-align: right;">-</td>
+<td style="text-align: right;">1.24</td>
+<td style="text-align: right;">-</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Prefill: OpenVINO wins by 3.16x</strong> at a 512-token prompt (3.42x with int8 prefill). The shape of
+the curve is as informative as the ratio - Vulkan is flat from 128 to 512 tokens (171 -&gt; 169 t/s),
+which is what a per-token kernel does, while OpenVINO scales (236 -&gt; 535), which is what a tiled
+GEMM does.</p>
+<p><strong>Decode is not a tie.</strong> An earlier version of this page said it was, and that both backends were
+pinned to a ~80 GB/s hardware wall. That was wrong twice over. This machine's memory is
+8 x 16-bit LPDDR5X-9600 = <strong>153.6 GB/s</strong> peak, so ~80 GB/s was never the ceiling; and native
+OpenVINO sustains <strong>15.03 t/s</strong> on the same GPU and the same weights, which no bandwidth wall at
+12 t/s would allow. The wall was an <em>integration</em> ceiling, not a hardware one. Section 9 is about
+finding and partly removing it.</p>
+<p><strong>The PR's kernels are mandatory.</strong> Turn them off and the same model drops to 1.4 t/s prefill.
+(Caveat: that switch also disables the gate/up merge and the Hadamard fold, so it measures "whole
+PR off vs on", not the kernel alone.)</p>
+<blockquote>
+<p><strong>Measuring decode correctly.</strong> <code>llama-bench -p 128,512 -n 32,128</code> runs the prefill cells first
+and contaminates the first decode cell - in that ordering tg32 read 11.65 while tg128 read 12.62
+on the same build, which is backwards. Run <code>-n &lt;N&gt;</code> on its own. The <code>tg128 11.28</code> figure in the
+old table above was this artifact, and it is what produced a now-retracted claim that decode
+degrades with context depth. Measured properly, decode is flat.</p>
+</blockquote>
+<h3>Correctness</h3>
+<ul>
+<li>OpenVINO GPU output is <strong>identical to the CPU reference</strong> on a short greedy prompt.</li>
+<li>Default and <code>INT8_PREFILL=1</code> were <strong>byte-identical</strong> over 90 greedy tokens here.</li>
+<li>Vulkan agrees in substance but diverges in wording after ~35 greedy tokens - ordinary near-tie
+  drift between different kernels, not a correctness failure.</li>
+<li>The op-level test suite: <strong>8079 / 8084</strong>, and all 5 failures reproduce on an unmodified build,
+  so they pre-date this work.</li>
+</ul>
+<hr /></section><section class="panel" role="tabpanel" id="tab-9-9-closing-the-decode-gap" aria-labelledby="btn-tab-9-9-closing-the-decode-gap" hidden><h2>9. Closing the decode gap</h2><p>Everything above gets the model running correctly and fast at prefill. This section is the
+follow-up question: native OpenVINO decodes the same weights on the same GPU at 15.03 t/s and we
+were at 12.24. <strong>Where does the difference go?</strong></p>
+<h3>First, rule out the two usual suspects</h3>
+<p><figure class="fig"><svg class="diagram" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 640" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="640" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">Where a decode step actually goes</text>
+<text x="24" y="56" font-size="13" fill="#6b7480">Per-token op profile (GGML_OPENVINO_PROFILING=2), 2622 executed ops. The GPU is ~100% busy throughout.</text>
+<text x="24" y="96" font-size="14" font-weight="600" fill="#1b1f24">Per-token cost by op  (ms)</text>
+<text x="880" y="96" font-size="11.5" fill="#6b7480">n ops</text>
+<text x="408" y="125" font-size="11.5" text-anchor="end" fill="#1b1f24">FullyConnectedCompressed - the ternary GEMVs</text>
+<rect x="420" y="110" width="469.5" height="20" rx="4" fill="#2f6fb3"/>
+<rect x="420" y="110" width="6.0" height="20" fill="#2f6fb3"/>
+<text x="898.5" y="125" font-size="11.5" font-weight="600" fill="#1b1f24">65.73</text>
+<text x="972" y="125" font-size="11" text-anchor="end" font-family="ui-monospace, Consolas, monospace" fill="#6b7480">257</text>
+<text x="408" y="151" font-size="11.5" text-anchor="end" fill="#1b1f24">Convert - f32 state boundary</text>
+<rect x="420" y="136" width="17.8" height="20" rx="4" fill="#c77c1e"/>
+<rect x="420" y="136" width="6.0" height="20" fill="#c77c1e"/>
+<text x="446.8" y="151" font-size="11.5" font-weight="600" fill="#1b1f24">2.49</text>
+<text x="972" y="151" font-size="11" text-anchor="end" font-family="ui-monospace, Consolas, monospace" fill="#6b7480">275</text>
+<text x="408" y="177" font-size="11.5" text-anchor="end" fill="#1b1f24">GatedDeltaNet</text>
+<rect x="420" y="162" width="13.6" height="20" rx="4" fill="#6b4fa8"/>
+<rect x="420" y="162" width="6.0" height="20" fill="#6b4fa8"/>
+<text x="442.6" y="177" font-size="11.5" font-weight="600" fill="#1b1f24">1.9</text>
+<text x="972" y="177" font-size="11" text-anchor="end" font-family="ui-monospace, Consolas, monospace" fill="#6b7480">48</text>
+<text x="408" y="203" font-size="11.5" text-anchor="end" fill="#1b1f24">Transpose</text>
+<rect x="420" y="188" width="7.7" height="20" rx="4" fill="#2d8a4e"/>
+<rect x="420" y="188" width="6.0" height="20" fill="#2d8a4e"/>
+<text x="436.7" y="203" font-size="11.5" font-weight="600" fill="#1b1f24">1.08</text>
+<text x="972" y="203" font-size="11" text-anchor="end" font-family="ui-monospace, Consolas, monospace" fill="#6b7480">177</text>
+<text x="408" y="229" font-size="11.5" text-anchor="end" fill="#1b1f24">FullyConnected - BF16 ssm_alpha/beta</text>
+<rect x="420" y="214" width="7.6" height="20" rx="4" fill="#8a93a0"/>
+<rect x="420" y="214" width="6.0" height="20" fill="#8a93a0"/>
+<text x="436.6" y="229" font-size="11.5" font-weight="600" fill="#1b1f24">1.06</text>
+<text x="972" y="229" font-size="11" text-anchor="end" font-family="ui-monospace, Consolas, monospace" fill="#6b7480">97</text>
+<text x="408" y="255" font-size="11.5" text-anchor="end" fill="#1b1f24">Result - cache_r/cache_s writeback</text>
+<rect x="420" y="240" width="7.6" height="20" rx="4" fill="#8a93a0"/>
+<rect x="420" y="240" width="6.0" height="20" fill="#8a93a0"/>
+<text x="436.6" y="255" font-size="11.5" font-weight="600" fill="#1b1f24">1.06</text>
+<text x="972" y="255" font-size="11" text-anchor="end" font-family="ui-monospace, Consolas, monospace" fill="#6b7480">96</text>
+<text x="408" y="281" font-size="11.5" text-anchor="end" fill="#1b1f24">RMS</text>
+<rect x="420" y="266" width="4.9" height="20" rx="4" fill="#8a93a0"/>
+<rect x="420" y="266" width="4.9" height="20" fill="#8a93a0"/>
+<text x="433.9" y="281" font-size="11.5" font-weight="600" fill="#1b1f24">0.69</text>
+<text x="972" y="281" font-size="11" text-anchor="end" font-family="ui-monospace, Consolas, monospace" fill="#6b7480">209</text>
+<text x="408" y="307" font-size="11.5" text-anchor="end" fill="#1b1f24">StridedSlice / Concat / Add / rest</text>
+<rect x="420" y="292" width="15.6" height="20" rx="4" fill="#8a93a0"/>
+<rect x="420" y="292" width="6.0" height="20" fill="#8a93a0"/>
+<text x="444.6" y="307" font-size="11.5" font-weight="600" fill="#1b1f24">2.18</text>
+<text x="972" y="307" font-size="11" text-anchor="end" font-family="ui-monospace, Consolas, monospace" fill="#6b7480">1463</text>
+<rect x="24" y="334" width="952" height="104" rx="8" fill="#f7f9fb"/>
+<text x="40" y="360" font-size="13" font-weight="600" fill="#1b1f24">The GEMVs are not the problem</text>
+<text x="40" y="384" font-size="12.5" fill="#1b1f24">6.86 GB of weights in 65.7 ms is 106 GB/s - 69% of this machine's 153.6 GB/s peak (8 x 16-bit LPDDR5X-9600), and both</text>
+<text x="40" y="404" font-size="12.5" fill="#1b1f24">backends run the same TernOCL kernels over the same u2 weights. The whole remaining gap is the ~10 ms of non-GEMV</text>
+<text x="40" y="424" font-size="12.5" fill="#1b1f24">graph scaffolding, where the mean op costs 4.9 us and so op *count* is what matters, not op efficiency.</text>
+<text x="24" y="458" font-size="14" font-weight="600" fill="#1b1f24">Decode step, side by side  (ms/token)</text>
+<text x="188" y="487" font-size="11.5" text-anchor="end" fill="#1b1f24">native OpenVINO</text>
+<rect x="200" y="472" width="307.3" height="20" rx="4" fill="#6b4fa8"/>
+<rect x="200" y="472" width="6" height="20" fill="#6b4fa8"/>
+<rect x="509.3" y="472" width="11.9" height="20" rx="4" fill="#c77c1e"/>
+<text x="533.2" y="487" font-size="11.5" font-weight="600" fill="#1b1f24">64.7 ms GEMV  +  2.5 ms overhead</text>
+<text x="188" y="515" font-size="11.5" text-anchor="end" fill="#1b1f24">ggml-openvino</text>
+<rect x="200" y="500" width="312.1" height="20" rx="4" fill="#2f6fb3"/>
+<rect x="200" y="500" width="6" height="20" fill="#2f6fb3"/>
+<rect x="514.1" y="500" width="49.9" height="20" rx="4" fill="#c77c1e"/>
+<text x="576.0" y="515" font-size="11.5" font-weight="600" fill="#1b1f24">65.7 ms GEMV  +  10.5 ms overhead</text>
+<rect x="200" y="532" width="12" height="12" rx="2" fill="#c77c1e"/>
+<text x="218" y="542" font-size="11.5" fill="#6b7480">non-GEMV overhead - same GEMV term on both sides, so this band is the entire 1.12x.</text>
+</svg></figure></p>
+<p>The two standard explanations are "we are bandwidth-bound" and "we are dispatch-bound" (the host
+cannot feed the GPU fast enough). Both are measurable, and both turned out to be wrong:</p>
+<ul>
+<li><strong>GPU occupancy</strong>: 99.99% busy for ggml-openvino, 99.95% for native OpenVINO, measured off the
+  <code>xe</code> PMU during steady-state decode. The GPU is saturated on both paths, so this is not host
+  dispatch and not idle time.</li>
+<li><strong>The ternary GEMVs are already fast</strong>: 6.86 GB of weights in 65.7 ms is <strong>106 GB/s</strong>, 69% of
+  the 153.6 GB/s peak. And both backends run the <em>same</em> TernOCL kernels over the <em>same</em> u2
+  weights, so that term is identical on both sides and cannot be the difference.</li>
+</ul>
+<p>What is left is the scaffolding around the GEMVs: <code>64.7 GEMV + 2.5 overhead</code> for native OpenVINO
+versus <code>65.7 + 10.5</code> for ggml-openvino. <strong>The entire gap is ~10 ms/token of non-GEMV graph ops.</strong>
+The mean non-GEMV op costs 4.9 us, so what matters is how <em>many</em> ops there are, not how fast each
+one is.</p>
+<h3>The biggest single item: the recurrent state was being shipped back and forth</h3>
+<p><figure class="fig"><svg class="diagram" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 620" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="620" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">The fix: keep the GDN recurrent state in the op's own layout</text>
+<text x="24" y="56" font-size="13" fill="#6b7480">48 GatedDeltaNet layers x 2 permutes of a 3.1 MB state, every token - 1.73 ms of a 76.7 ms decode step.</text>
+<defs><marker id="a12" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#8a93a0"/></marker></defs>
+<rect x="24" y="84" width="452" height="300" rx="8" fill="#f7f9fb" stroke="#e2e7ee"/>
+<text x="42" y="112" font-size="14" font-weight="600" fill="#c0392b">Before - ggml layout in the buffer</text>
+<rect x="42" y="134" width="416" height="34" rx="5" fill="#ffffff" stroke="#d7dde6"/>
+<text x="54" y="156" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">ggml cache_s_l*   [B,H,value,key]</text>
+<path d="M250 168 L250 178" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a12)"/>
+<rect x="42" y="178" width="416" height="34" rx="5" fill="#fdecea" stroke="#c0392b"/>
+<text x="54" y="200" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">Transpose {0,1,3,2}</text>
+<path d="M250 212 L250 222" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a12)"/>
+<rect x="42" y="222" width="416" height="34" rx="5" fill="#ffffff" stroke="#d7dde6"/>
+<text x="54" y="244" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">GatedDeltaNet   [B,H,key,value]</text>
+<path d="M250 256 L250 266" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a12)"/>
+<rect x="42" y="266" width="416" height="34" rx="5" fill="#fdecea" stroke="#c0392b"/>
+<text x="54" y="288" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">Transpose {0,1,3,2}   (back again)</text>
+<path d="M250 300 L250 310" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a12)"/>
+<rect x="42" y="310" width="416" height="34" rx="5" fill="#ffffff" stroke="#d7dde6"/>
+<text x="54" y="332" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">ggml cache_s_l*   [B,H,value,key]</text>
+<text x="42" y="372" font-size="12" font-weight="600" fill="#c0392b">2 permutes x 48 layers = 96 ops, 1.73 ms/token</text>
+<rect x="524" y="84" width="452" height="300" rx="8" fill="#f7f9fb" stroke="#e2e7ee"/>
+<text x="542" y="112" font-size="14" font-weight="600" fill="#2d8a4e">After - the op's layout in the buffer</text>
+<rect x="542" y="134" width="416" height="34" rx="5" fill="#ffffff" stroke="#d7dde6"/>
+<text x="554" y="156" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">ggml cache_s_l*   [B,H,key,value]</text>
+<path d="M750 168 L750 178" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a12)"/>
+<rect x="542" y="178" width="416" height="34" rx="5" fill="#eaf4ee" stroke="#2d8a4e"/>
+<text x="554" y="200" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">(no transpose)</text>
+<path d="M750 212 L750 222" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a12)"/>
+<rect x="542" y="222" width="416" height="34" rx="5" fill="#ffffff" stroke="#d7dde6"/>
+<text x="554" y="244" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">GatedDeltaNet   [B,H,key,value]</text>
+<path d="M750 256 L750 266" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a12)"/>
+<rect x="542" y="266" width="416" height="34" rx="5" fill="#eaf4ee" stroke="#2d8a4e"/>
+<text x="554" y="288" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">(no transpose)</text>
+<path d="M750 300 L750 310" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a12)"/>
+<rect x="542" y="310" width="416" height="34" rx="5" fill="#ffffff" stroke="#d7dde6"/>
+<text x="554" y="332" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">ggml cache_s_l*   [B,H,key,value]</text>
+<text x="542" y="372" font-size="12" font-weight="600" fill="#2d8a4e">0 ops, 0 ms - decode 13.05 -> 13.45 t/s</text>
+<rect x="24" y="410" width="952" height="176" rx="8" fill="#f7f9fb"/>
+<text x="40" y="436" font-size="13" font-weight="600" fill="#1b1f24">Why this is safe</text>
+<text x="40" y="462" font-size="12.5" fill="#1b1f24">The state is read from and written straight back to the same ggml buffer, and nothing else observes it in between,</text>
+<text x="40" y="483" font-size="12.5" fill="#1b1f24">so the buffer can simply hold the op's layout instead of ggml's. Guarded on the two state dims being equal - otherwise</text>
+<text x="40" y="504" font-size="12.5" fill="#1b1f24">skipping the permute would also change the shape ggml allocated. Bonsai 2's state is square (128x128), so it applies.</text>
+<text x="40" y="525" font-size="12.5" fill="#1b1f24">Every graph touching the buffer must agree: instrumented 144/144 GDN translations reported the native-layout path.</text>
+<text x="40" y="560" font-size="12" fill="#6b7480">OpenVINO's own GGUF frontend made the same change upstream in 630516e048, behind a split_outputs flag.</text>
+</svg></figure></p>
+<p>Grouping the overhead by <em>cause</em> instead of by op type made one mechanism jump out. Three
+different op types each appeared exactly <strong>96 times = 48 GDN layers x 2</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>per-token cost</th>
+<th>op</th>
+<th style="text-align: right;">n</th>
+<th style="text-align: right;">ms</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>state layout swap <code>{0,1,3,2}</code></td>
+<td><code>Transpose</code></td>
+<td style="text-align: right;">96</td>
+<td style="text-align: right;">1.73</td>
+</tr>
+<tr>
+<td>state dtype conversion to f32</td>
+<td><code>Convert</code></td>
+<td style="text-align: right;">96</td>
+<td style="text-align: right;">2.43</td>
+</tr>
+<tr>
+<td>state writeback</td>
+<td><code>Result</code> (<code>cache_s_l*</code>, <code>cache_r_l*</code>)</td>
+<td style="text-align: right;">96</td>
+<td style="text-align: right;">1.06</td>
+</tr>
+</tbody>
+</table>
+<p>All of it is the cost of handing the GDN recurrent state across the graph boundary and back, every
+token. The state is <code>[1, 48, 128, 128]</code> f32 - 3.1 MB per layer, ~151 MB per token in total.</p>
+<p>The <strong>layout</strong> half is now fixed. <code>translate_gated_delta_net</code> was transposing the state into the
+fused op's <code>[B, H, key, value]</code> on the way in and transposing it straight back to ggml's
+<code>[B, H, value, key]</code> on the way out. But on this path the state is read from and written back to
+the same ggml buffer with nothing else looking at it in between - so the buffer can simply hold
+the op's layout and both transposes disappear. Guarded on the two state dims being equal, since
+otherwise skipping the permute would also change the shape ggml allocated (Bonsai 2's state is
+square, 128x128). OpenVINO's own GGUF frontend made the identical change upstream in <code>630516e048</code>.</p>
+<p>Worth 96 ops and 1.73 ms/token: <strong>13.05 -&gt; 13.45 t/s</strong>, prefill unchanged, output identical.</p>
+<h3>What that adds up to, and what is left</h3>
+<p>Four changes landed, three of them ported from <code>ravi9/dev_backend_openvino</code> and one written here:</p>
+<table>
+<thead>
+<tr>
+<th>change</th>
+<th>decode</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>attention sizes derived from the KQ-mask shape (so the GPU picks its fused SDPA kernel)</td>
+<td>+2.7%</td>
+</tr>
+<tr>
+<td>4-D stateless KV cache, <code>GGML_OPENVINO_ENABLE_KV_4D=1</code> (needs OpenVINO &gt;= 2026.5)</td>
+<td>+1.4%</td>
+</tr>
+<tr>
+<td><code>GGML_OPENVINO_DISABLE_KV_SLICE=1</code></td>
+<td>+1.6%</td>
+</tr>
+<tr>
+<td>GDN recurrent state kept in the op's layout</td>
+<td>+3.0%</td>
+</tr>
+<tr>
+<td><strong>total</strong></td>
+<td><strong>12.24 -&gt; 13.46 t/s, +10.0%</strong></td>
+</tr>
+</tbody>
+</table>
+<p>The gap to native OpenVINO is now <strong>1.12x</strong>, down from 1.22x.</p>
+<p>The remaining ~3.4 ms/token is the <strong>dtype and writeback</strong> halves of the same state round-trip, and
+they are one problem rather than two: ggml owns the recurrent state in <strong>f32</strong> while the GPU
+computes in f16, so the state crosses that boundary every token. The fused op is not the obstacle -
+it type-checks each input independently against <code>{f32, f16, bf16}</code> and takes its output state type
+from its <em>input</em> state type, so an f32 state beside f16 activations is perfectly legal. The fix is
+to keep the state resident on the device as an OpenVINO <code>Variable</code>, which is what OpenVINO's GGUF
+frontend does in its <code>make_stateful</code> pass. Two cautions for whoever picks that up:
+<code>GGML_OPENVINO_STATEFUL_EXECUTION=1</code> does <strong>not</strong> do this today (it covers the KV cache only, and
+measured <em>slower</em> here), and the hard part is not the plumbing but staying correct when llama.cpp
+clears and copies state slots through the compute graph - operations an OpenVINO-internal state
+would never see.</p>
+<hr /></section><section class="panel" role="tabpanel" id="tab-10-10-what-you-need-to-run-it" aria-labelledby="btn-tab-10-10-what-you-need-to-run-it" hidden><h2>10. What you need to run it</h2><p>All four pieces are required, and each fails differently if missing:</p>
+<table>
+<thead>
+<tr>
+<th>piece</th>
+<th>if missing</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PrismML-Eng/llama.cpp</code> (branch <code>prism</code>)</td>
+<td>the file will not load - stock llama.cpp rejects the type</td>
+</tr>
+<tr>
+<td>the four ggml-openvino fixes</td>
+<td>crash at graph build, or wrong output</td>
+</tr>
+<tr>
+<td>OpenVINO built with PR #38460</td>
+<td>runs, but 167x slower</td>
+</tr>
+<tr>
+<td>an Intel GPU with the OpenCL runtime</td>
+<td>the ternary kernels require it</td>
+</tr>
+</tbody>
+</table>
+<pre><code class="language-sh">source &lt;openvino-install&gt;/setupvars.sh
+GGML_OPENVINO_DEVICE=GPU ./build-pr/bin/llama-cli \
+  -m Ternary-Bonsai-2-27B-PQ2_0.gguf -p &quot;The capital of France is&quot; \
+  -n 20 -c 512 --no-warmup -st --temp 0
+</code></pre>
+<p>Useful switches while poking at it:</p>
+<table>
+<thead>
+<tr>
+<th>variable</th>
+<th>effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>OV_TERNOCL_INT2_DEBUG=1</code></td>
+<td>prints accept/reject plus the reason, per matmul</td>
+</tr>
+<tr>
+<td><code>OV_TERNOCL_INT2_CFG_DEBUG=1</code></td>
+<td>prints the chosen tile and kernel per shape</td>
+</tr>
+<tr>
+<td><code>OV_TERNOCL_HADAMARD_DEBUG=1</code></td>
+<td>traces the rotation fold</td>
+</tr>
+<tr>
+<td><code>OV_TERNOCL_INT2_INT8_PREFILL=1</code></td>
+<td>the faster, slightly lossy prefill kernel</td>
+</tr>
+<tr>
+<td><code>OV_TERNOCL_INT2_FUSE_HADAMARD=0</code></td>
+<td>leave the rotation in the graph instead of folding it</td>
+</tr>
+<tr>
+<td><code>OV_TERNOCL_INT2_DISABLE=1</code></td>
+<td>turn the whole PR off</td>
+</tr>
+<tr>
+<td><code>GGML_OPENVINO_DUMP_CGRAPH=1</code></td>
+<td>dump the ggml graph to <code>cgraph_ov.txt</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>One benchmarking trap worth repeating:</strong> the OpenVINO backend compiles a graph per token count,
+and that compile takes tens of seconds on a 27 B model. <code>llama-bench --no-warmup</code> puts it <em>inside</em>
+the measured run and reports 4 t/s instead of 234. Always let it warm up.</p></section>
+  <p class="foot">Standalone build of <code>BONSAI2_EXPLAINED.md</code> — all diagrams inlined,
+  no external assets. Regenerate with <code>python3 make_bonsai2_html.py</code>.</p>
+</div>
+<script>
+(function(){
+  var strip=document.querySelector('.tabs');
+  var tabs=[].slice.call(document.querySelectorAll('.tab'));
+  var panels=[].slice.call(document.querySelectorAll('.panel'));
+  function show(i,focus){
+    tabs.forEach(function(t,j){
+      var on=i===j;
+      t.setAttribute('aria-selected',on?'true':'false');
+      t.tabIndex=on?0:-1;
+      panels[j].classList.toggle('is-active',on);
+      panels[j].hidden=!on;
+    });
+    if(focus) tabs[i].focus();
+    if(history.replaceState) history.replaceState(null,'','#'+panels[i].id);
+  }
+  strip.addEventListener('click',function(e){
+    var b=e.target.closest('.tab'); if(b) show(tabs.indexOf(b),false);
+  });
+  strip.addEventListener('keydown',function(e){
+    var i=tabs.indexOf(document.activeElement); if(i<0) return;
+    var n={ArrowRight:i+1,ArrowLeft:i-1,Home:0,End:tabs.length-1}[e.key];
+    if(n===undefined) return;
+    e.preventDefault(); show((n+tabs.length)%tabs.length,true);
+  });
+  var h=location.hash.slice(1);
+  var k=panels.findIndex(function(p){return p.id===h;});
+  show(k>=0?k:0,false);
+})();
+</script>
+</body>
+</html>

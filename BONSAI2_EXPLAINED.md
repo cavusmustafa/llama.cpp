@@ -1,11 +1,13 @@
 # Running a ternary 27B model on an Intel GPU - how it all fits together
 
 A walkthrough of what Bonsai 2 27B is, how its 2-bit weights are stored, why it needs a
-Hadamard rotation at run time, and what had to change in llama.cpp's OpenVINO backend to make
-it run on an Intel GPU.
+Hadamard rotation at run time, what had to change in llama.cpp's OpenVINO backend to make it run
+on an Intel GPU, and where its decode time actually goes.
 
 Written to be readable without prior knowledge of this codebase. Measured numbers and the terse
 engineering version are in `BONSAI2_TERNARY_OV_REPORT.md`; this file explains the *why*.
+
+Last updated 2026-10-17: sections 8 and 9 are new or rewritten.
 
 ---
 
@@ -14,10 +16,11 @@ engineering version are in `BONSAI2_TERNARY_OV_REPORT.md`; this file explains th
 | | |
 |---|---|
 | **Model** | Bonsai 2 27B, a ternary (-1 / 0 / +1) quantization of a 27 B hybrid-attention LLM. 6.70 GiB at 2.13 bits per weight, vs ~54 GB at fp16. |
-| **Goal** | Run it through llama.cpp's OpenVINO backend on an Intel GPU, using the new 2-bit OpenCL kernels from OpenVINO PR #38460, and compare against llama.cpp's Vulkan backend. |
-| **Work needed** | 161 lines across 7 files in `ggml/src/ggml-openvino`. Four independent fixes. |
-| **Outcome** | Correct output, and **3.2x faster prefill than Vulkan** (527 vs 165 t/s). Decode is a tie because both backends are limited by memory bandwidth, not by math. |
+| **Goal** | Run it through llama.cpp's OpenVINO backend on an Intel GPU, using the new 2-bit OpenCL kernels from OpenVINO PR #38460, and compare against Vulkan and against native OpenVINO. |
+| **Work needed** | 161 lines across 7 files to make it run, then four more changes to close part of the decode gap. |
+| **Outcome** | Correct output, **3.16x faster prefill than Vulkan** (535 vs 169 t/s), and decode improved 12.24 -> 13.46 t/s, which is **1.12x off** the native-OpenVINO ceiling. |
 | **Biggest surprise** | Without the PR's 2-bit kernels, the same model runs **167x slower**. The kernels are not an optimization, they are the difference between usable and unusable. |
+| **Correction** | This page previously said decode was a tie limited by an ~80 GB/s bandwidth wall. Both halves were wrong - the peak is 153.6 GB/s and the limit was integration overhead. See section 9. |
 
 ---
 
@@ -293,33 +296,76 @@ Both read the *same* packed weights, but move the work around differently:
 | **int2 x f16 up-convert** (default) | dequantized to fp16 in registers, then fp16 matrix instructions | stay in native fp16 - no extra error |
 | **int2 x int8** (`OV_TERNOCL_INT2_INT8_PREFILL=1`, prefill only) | never unpacked - raw 2-bit codes feed a native int8 x int2 matrix instruction | quantized to int8 per (row, 128-group) - faster, slightly lossy |
 
+### What `OV_TERNOCL_INT2_INT8_PREFILL=1` actually does
+
+It is **off by default**, and it changes only how the *prompt* is processed - the weights on disk
+are untouched and decode is unaffected.
+
+By default the ternary kernel **up-converts**: it unpacks each 2-bit code to fp16 in registers and
+runs fp16 matrix instructions against fp16 activations. Correct, lossless on the activation side,
+but it spends the GPU's fp16 matrix throughput on operands that only ever hold three distinct
+values.
+
+With the switch on, prefill instead takes the **int2 x int8 DPAS** path:
+
+- the weights are **never unpacked** - the raw 2-bit codes feed the matrix instruction directly;
+- the **activations** are quantized to int8, one scale per (row, 128-group);
+- the hardware's integer matrix instruction runs at a higher rate than the fp16 one.
+
+It only engages where it pays off - `M > 8`, i.e. a prompt or a batch, never the `M = 1` decode
+step (see the dispatch snippet above). That is why every int8 row in the results is a prefill
+number and the decode column is blank.
+
+**The trade is accuracy for prompt speed.** Quantizing activations to int8 is lossy in a way the
+default path is not. On this model it was harmless - default and `INT8_PREFILL=1` were
+byte-identical over 90 greedy tokens here, and the PR author reports GSM8K within the standard
+error of the default. It is still the reason the switch is opt-in rather than the default: that is
+the PR author's call to make, and it needs a real accuracy harness rather than a 90-token diff.
+
+Measured here: **pp128 236 -> 549 t/s (2.3x)** and **pp512 535 -> 580 t/s (1.08x)**. The gain is
+much larger at short prompts because at pp512 the default path is already close to saturating the
+machine, so there is less headroom left to recover.
+
 ---
 
 ## 8. Results
 
-![results](diagrams_bonsai2/10-results.svg)
+![results](diagrams_bonsai2/11-results-2026-10-17.svg)
 
-Intel Arc B390 iGPU, same GPU and same model file for both backends.
+Intel Arc B390 iGPU, same GPU and same model file for every row. Decode measured with `-n` alone
+and prefill with `-p` - see the measurement note below, which is not a formality.
 
 | | pp128 | pp512 | tg32 | tg128 |
 |---|---:|---:|---:|---:|
-| ggml-openvino + ternary kernels | 233.9 | 527.4 | 12.25 | 11.28 |
-| ggml-openvino, `INT8_PREFILL=1` | **530.2** | **571.1** | 11.64 | - |
-| ggml-vulkan | 161.0 | 165.4 | **12.32** | **12.31** |
+| **native OpenVINO** (`paged_bench_llm_27b`) | 241.2 | **638.5** | **14.90** | **15.03** |
+| **native OpenVINO**, `INT8_PREFILL=1` | **616.3** | **693.4** | - | - |
+| **ggml-openvino** + ternary kernels | 236.1 | 535.1 | 13.45 | 13.46 |
+| **ggml-openvino**, `INT8_PREFILL=1` | 549.0 | 579.7 | - | - |
+| ggml-openvino, before the 2026-10-17 work | 232.2 | 527.3 | 12.27 | 12.24 |
+| **ggml-vulkan** | 171.2 | 169.5 | 12.70 | 12.70 |
 | ggml-openvino, ternary kernels off | 1.4 | - | 1.24 | - |
 
-**Prefill: OpenVINO wins by 3.2x** at a 512-token prompt. The shape of the curve is as
-informative as the ratio - Vulkan is flat from 128 to 512 tokens (161 -> 165 t/s), which is what a
-per-token kernel does, while OpenVINO scales (234 -> 527), which is what a tiled GEMM does.
+**Prefill: OpenVINO wins by 3.16x** at a 512-token prompt (3.42x with int8 prefill). The shape of
+the curve is as informative as the ratio - Vulkan is flat from 128 to 512 tokens (171 -> 169 t/s),
+which is what a per-token kernel does, while OpenVINO scales (236 -> 535), which is what a tiled
+GEMM does.
 
-**Decode is a tie, and that is expected.** Generating one token requires reading essentially the
-whole model: 6.70 GiB x 12 t/s is about 80 GB/s, roughly all this integrated GPU can sustain.
-Both backends are sitting on the memory-bandwidth wall, so neither kernel can pull ahead. Decode
-on this hardware simply cannot distinguish the two; that needs a discrete GPU.
+**Decode is not a tie.** An earlier version of this page said it was, and that both backends were
+pinned to a ~80 GB/s hardware wall. That was wrong twice over. This machine's memory is
+8 x 16-bit LPDDR5X-9600 = **153.6 GB/s** peak, so ~80 GB/s was never the ceiling; and native
+OpenVINO sustains **15.03 t/s** on the same GPU and the same weights, which no bandwidth wall at
+12 t/s would allow. The wall was an *integration* ceiling, not a hardware one. Section 9 is about
+finding and partly removing it.
 
 **The PR's kernels are mandatory.** Turn them off and the same model drops to 1.4 t/s prefill.
 (Caveat: that switch also disables the gate/up merge and the Hadamard fold, so it measures "whole
 PR off vs on", not the kernel alone.)
+
+> **Measuring decode correctly.** `llama-bench -p 128,512 -n 32,128` runs the prefill cells first
+> and contaminates the first decode cell - in that ordering tg32 read 11.65 while tg128 read 12.62
+> on the same build, which is backwards. Run `-n <N>` on its own. The `tg128 11.28` figure in the
+> old table above was this artifact, and it is what produced a now-retracted claim that decode
+> degrades with context depth. Measured properly, decode is flat.
 
 ### Correctness
 
@@ -332,7 +378,86 @@ PR off vs on", not the kernel alone.)
 
 ---
 
-## 9. What you need to run it
+## 9. Closing the decode gap
+
+Everything above gets the model running correctly and fast at prefill. This section is the
+follow-up question: native OpenVINO decodes the same weights on the same GPU at 15.03 t/s and we
+were at 12.24. **Where does the difference go?**
+
+### First, rule out the two usual suspects
+
+![decode budget](diagrams_bonsai2/13-decode-budget.svg)
+
+The two standard explanations are "we are bandwidth-bound" and "we are dispatch-bound" (the host
+cannot feed the GPU fast enough). Both are measurable, and both turned out to be wrong:
+
+- **GPU occupancy**: 99.99% busy for ggml-openvino, 99.95% for native OpenVINO, measured off the
+  `xe` PMU during steady-state decode. The GPU is saturated on both paths, so this is not host
+  dispatch and not idle time.
+- **The ternary GEMVs are already fast**: 6.86 GB of weights in 65.7 ms is **106 GB/s**, 69% of
+  the 153.6 GB/s peak. And both backends run the *same* TernOCL kernels over the *same* u2
+  weights, so that term is identical on both sides and cannot be the difference.
+
+What is left is the scaffolding around the GEMVs: `64.7 GEMV + 2.5 overhead` for native OpenVINO
+versus `65.7 + 10.5` for ggml-openvino. **The entire gap is ~10 ms/token of non-GEMV graph ops.**
+The mean non-GEMV op costs 4.9 us, so what matters is how *many* ops there are, not how fast each
+one is.
+
+### The biggest single item: the recurrent state was being shipped back and forth
+
+![gdn state round-trip](diagrams_bonsai2/12-gdn-state-roundtrip.svg)
+
+Grouping the overhead by *cause* instead of by op type made one mechanism jump out. Three
+different op types each appeared exactly **96 times = 48 GDN layers x 2**:
+
+| per-token cost | op | n | ms |
+|---|---|---:|---:|
+| state layout swap `{0,1,3,2}` | `Transpose` | 96 | 1.73 |
+| state dtype conversion to f32 | `Convert` | 96 | 2.43 |
+| state writeback | `Result` (`cache_s_l*`, `cache_r_l*`) | 96 | 1.06 |
+
+All of it is the cost of handing the GDN recurrent state across the graph boundary and back, every
+token. The state is `[1, 48, 128, 128]` f32 - 3.1 MB per layer, ~151 MB per token in total.
+
+The **layout** half is now fixed. `translate_gated_delta_net` was transposing the state into the
+fused op's `[B, H, key, value]` on the way in and transposing it straight back to ggml's
+`[B, H, value, key]` on the way out. But on this path the state is read from and written back to
+the same ggml buffer with nothing else looking at it in between - so the buffer can simply hold
+the op's layout and both transposes disappear. Guarded on the two state dims being equal, since
+otherwise skipping the permute would also change the shape ggml allocated (Bonsai 2's state is
+square, 128x128). OpenVINO's own GGUF frontend made the identical change upstream in `630516e048`.
+
+Worth 96 ops and 1.73 ms/token: **13.05 -> 13.45 t/s**, prefill unchanged, output identical.
+
+### What that adds up to, and what is left
+
+Four changes landed, three of them ported from `ravi9/dev_backend_openvino` and one written here:
+
+| change | decode |
+|---|---|
+| attention sizes derived from the KQ-mask shape (so the GPU picks its fused SDPA kernel) | +2.7% |
+| 4-D stateless KV cache, `GGML_OPENVINO_ENABLE_KV_4D=1` (needs OpenVINO >= 2026.5) | +1.4% |
+| `GGML_OPENVINO_DISABLE_KV_SLICE=1` | +1.6% |
+| GDN recurrent state kept in the op's layout | +3.0% |
+| **total** | **12.24 -> 13.46 t/s, +10.0%** |
+
+The gap to native OpenVINO is now **1.12x**, down from 1.22x.
+
+The remaining ~3.4 ms/token is the **dtype and writeback** halves of the same state round-trip, and
+they are one problem rather than two: ggml owns the recurrent state in **f32** while the GPU
+computes in f16, so the state crosses that boundary every token. The fused op is not the obstacle -
+it type-checks each input independently against `{f32, f16, bf16}` and takes its output state type
+from its *input* state type, so an f32 state beside f16 activations is perfectly legal. The fix is
+to keep the state resident on the device as an OpenVINO `Variable`, which is what OpenVINO's GGUF
+frontend does in its `make_stateful` pass. Two cautions for whoever picks that up:
+`GGML_OPENVINO_STATEFUL_EXECUTION=1` does **not** do this today (it covers the KV cache only, and
+measured *slower* here), and the hard part is not the plumbing but staying correct when llama.cpp
+clears and copies state slots through the compute graph - operations an OpenVINO-internal state
+would never see.
+
+---
+
+## 10. What you need to run it
 
 All four pieces are required, and each fails differently if missing:
 

@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 620" width="1000" height="620" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="620" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">The fix: keep the GDN recurrent state in the op's own layout</text>
+<text x="24" y="56" font-size="13" fill="#6b7480">48 GatedDeltaNet layers x 2 permutes of a 3.1 MB state, every token - 1.73 ms of a 76.7 ms decode step.</text>
+<defs><marker id="a12" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#8a93a0"/></marker></defs>
+<rect x="24" y="84" width="452" height="300" rx="8" fill="#f7f9fb" stroke="#e2e7ee"/>
+<text x="42" y="112" font-size="14" font-weight="600" fill="#c0392b">Before - ggml layout in the buffer</text>
+<rect x="42" y="134" width="416" height="34" rx="5" fill="#ffffff" stroke="#d7dde6"/>
+<text x="54" y="156" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">ggml cache_s_l*   [B,H,value,key]</text>
+<path d="M250 168 L250 178" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a12)"/>
+<rect x="42" y="178" width="416" height="34" rx="5" fill="#fdecea" stroke="#c0392b"/>
+<text x="54" y="200" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">Transpose {0,1,3,2}</text>
+<path d="M250 212 L250 222" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a12)"/>
+<rect x="42" y="222" width="416" height="34" rx="5" fill="#ffffff" stroke="#d7dde6"/>
+<text x="54" y="244" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">GatedDeltaNet   [B,H,key,value]</text>
+<path d="M250 256 L250 266" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a12)"/>
+<rect x="42" y="266" width="416" height="34" rx="5" fill="#fdecea" stroke="#c0392b"/>
+<text x="54" y="288" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">Transpose {0,1,3,2}   (back again)</text>
+<path d="M250 300 L250 310" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a12)"/>
+<rect x="42" y="310" width="416" height="34" rx="5" fill="#ffffff" stroke="#d7dde6"/>
+<text x="54" y="332" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">ggml cache_s_l*   [B,H,value,key]</text>
+<text x="42" y="372" font-size="12" font-weight="600" fill="#c0392b">2 permutes x 48 layers = 96 ops, 1.73 ms/token</text>
+<rect x="524" y="84" width="452" height="300" rx="8" fill="#f7f9fb" stroke="#e2e7ee"/>
+<text x="542" y="112" font-size="14" font-weight="600" fill="#2d8a4e">After - the op's layout in the buffer</text>
+<rect x="542" y="134" width="416" height="34" rx="5" fill="#ffffff" stroke="#d7dde6"/>
+<text x="554" y="156" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">ggml cache_s_l*   [B,H,key,value]</text>
+<path d="M750 168 L750 178" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a12)"/>
+<rect x="542" y="178" width="416" height="34" rx="5" fill="#eaf4ee" stroke="#2d8a4e"/>
+<text x="554" y="200" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">(no transpose)</text>
+<path d="M750 212 L750 222" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a12)"/>
+<rect x="542" y="222" width="416" height="34" rx="5" fill="#ffffff" stroke="#d7dde6"/>
+<text x="554" y="244" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">GatedDeltaNet   [B,H,key,value]</text>
+<path d="M750 256 L750 266" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a12)"/>
+<rect x="542" y="266" width="416" height="34" rx="5" fill="#eaf4ee" stroke="#2d8a4e"/>
+<text x="554" y="288" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">(no transpose)</text>
+<path d="M750 300 L750 310" stroke="#8a93a0" stroke-width="1.5" marker-end="url(#a12)"/>
+<rect x="542" y="310" width="416" height="34" rx="5" fill="#ffffff" stroke="#d7dde6"/>
+<text x="554" y="332" font-size="12" font-family="ui-monospace, Consolas, monospace" fill="#1b1f24">ggml cache_s_l*   [B,H,key,value]</text>
+<text x="542" y="372" font-size="12" font-weight="600" fill="#2d8a4e">0 ops, 0 ms - decode 13.05 -> 13.45 t/s</text>
+<rect x="24" y="410" width="952" height="176" rx="8" fill="#f7f9fb"/>
+<text x="40" y="436" font-size="13" font-weight="600" fill="#1b1f24">Why this is safe</text>
+<text x="40" y="462" font-size="12.5" fill="#1b1f24">The state is read from and written straight back to the same ggml buffer, and nothing else observes it in between,</text>
+<text x="40" y="483" font-size="12.5" fill="#1b1f24">so the buffer can simply hold the op's layout instead of ggml's. Guarded on the two state dims being equal - otherwise</text>
+<text x="40" y="504" font-size="12.5" fill="#1b1f24">skipping the permute would also change the shape ggml allocated. Bonsai 2's state is square (128x128), so it applies.</text>
+<text x="40" y="525" font-size="12.5" fill="#1b1f24">Every graph touching the buffer must agree: instrumented 144/144 GDN translations reported the native-layout path.</text>
+<text x="40" y="560" font-size="12" fill="#6b7480">OpenVINO's own GGUF frontend made the same change upstream in 630516e048, behind a split_outputs flag.</text>
+</svg>

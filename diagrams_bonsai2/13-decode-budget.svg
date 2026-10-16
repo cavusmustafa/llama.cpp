@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 640" width="1000" height="640" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="640" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">Where a decode step actually goes</text>
+<text x="24" y="56" font-size="13" fill="#6b7480">Per-token op profile (GGML_OPENVINO_PROFILING=2), 2622 executed ops. The GPU is ~100% busy throughout.</text>
+<text x="24" y="96" font-size="14" font-weight="600" fill="#1b1f24">Per-token cost by op  (ms)</text>
+<text x="880" y="96" font-size="11.5" fill="#6b7480">n ops</text>
+<text x="408" y="125" font-size="11.5" text-anchor="end" fill="#1b1f24">FullyConnectedCompressed - the ternary GEMVs</text>
+<rect x="420" y="110" width="469.5" height="20" rx="4" fill="#2f6fb3"/>
+<rect x="420" y="110" width="6.0" height="20" fill="#2f6fb3"/>
+<text x="898.5" y="125" font-size="11.5" font-weight="600" fill="#1b1f24">65.73</text>
+<text x="972" y="125" font-size="11" text-anchor="end" font-family="ui-monospace, Consolas, monospace" fill="#6b7480">257</text>
+<text x="408" y="151" font-size="11.5" text-anchor="end" fill="#1b1f24">Convert - f32 state boundary</text>
+<rect x="420" y="136" width="17.8" height="20" rx="4" fill="#c77c1e"/>
+<rect x="420" y="136" width="6.0" height="20" fill="#c77c1e"/>
+<text x="446.8" y="151" font-size="11.5" font-weight="600" fill="#1b1f24">2.49</text>
+<text x="972" y="151" font-size="11" text-anchor="end" font-family="ui-monospace, Consolas, monospace" fill="#6b7480">275</text>
+<text x="408" y="177" font-size="11.5" text-anchor="end" fill="#1b1f24">GatedDeltaNet</text>
+<rect x="420" y="162" width="13.6" height="20" rx="4" fill="#6b4fa8"/>
+<rect x="420" y="162" width="6.0" height="20" fill="#6b4fa8"/>
+<text x="442.6" y="177" font-size="11.5" font-weight="600" fill="#1b1f24">1.9</text>
+<text x="972" y="177" font-size="11" text-anchor="end" font-family="ui-monospace, Consolas, monospace" fill="#6b7480">48</text>
+<text x="408" y="203" font-size="11.5" text-anchor="end" fill="#1b1f24">Transpose</text>
+<rect x="420" y="188" width="7.7" height="20" rx="4" fill="#2d8a4e"/>
+<rect x="420" y="188" width="6.0" height="20" fill="#2d8a4e"/>
+<text x="436.7" y="203" font-size="11.5" font-weight="600" fill="#1b1f24">1.08</text>
+<text x="972" y="203" font-size="11" text-anchor="end" font-family="ui-monospace, Consolas, monospace" fill="#6b7480">177</text>
+<text x="408" y="229" font-size="11.5" text-anchor="end" fill="#1b1f24">FullyConnected - BF16 ssm_alpha/beta</text>
+<rect x="420" y="214" width="7.6" height="20" rx="4" fill="#8a93a0"/>
+<rect x="420" y="214" width="6.0" height="20" fill="#8a93a0"/>
+<text x="436.6" y="229" font-size="11.5" font-weight="600" fill="#1b1f24">1.06</text>
+<text x="972" y="229" font-size="11" text-anchor="end" font-family="ui-monospace, Consolas, monospace" fill="#6b7480">97</text>
+<text x="408" y="255" font-size="11.5" text-anchor="end" fill="#1b1f24">Result - cache_r/cache_s writeback</text>
+<rect x="420" y="240" width="7.6" height="20" rx="4" fill="#8a93a0"/>
+<rect x="420" y="240" width="6.0" height="20" fill="#8a93a0"/>
+<text x="436.6" y="255" font-size="11.5" font-weight="600" fill="#1b1f24">1.06</text>
+<text x="972" y="255" font-size="11" text-anchor="end" font-family="ui-monospace, Consolas, monospace" fill="#6b7480">96</text>
+<text x="408" y="281" font-size="11.5" text-anchor="end" fill="#1b1f24">RMS</text>
+<rect x="420" y="266" width="4.9" height="20" rx="4" fill="#8a93a0"/>
+<rect x="420" y="266" width="4.9" height="20" fill="#8a93a0"/>
+<text x="433.9" y="281" font-size="11.5" font-weight="600" fill="#1b1f24">0.69</text>
+<text x="972" y="281" font-size="11" text-anchor="end" font-family="ui-monospace, Consolas, monospace" fill="#6b7480">209</text>
+<text x="408" y="307" font-size="11.5" text-anchor="end" fill="#1b1f24">StridedSlice / Concat / Add / rest</text>
+<rect x="420" y="292" width="15.6" height="20" rx="4" fill="#8a93a0"/>
+<rect x="420" y="292" width="6.0" height="20" fill="#8a93a0"/>
+<text x="444.6" y="307" font-size="11.5" font-weight="600" fill="#1b1f24">2.18</text>
+<text x="972" y="307" font-size="11" text-anchor="end" font-family="ui-monospace, Consolas, monospace" fill="#6b7480">1463</text>
+<rect x="24" y="334" width="952" height="104" rx="8" fill="#f7f9fb"/>
+<text x="40" y="360" font-size="13" font-weight="600" fill="#1b1f24">The GEMVs are not the problem</text>
+<text x="40" y="384" font-size="12.5" fill="#1b1f24">6.86 GB of weights in 65.7 ms is 106 GB/s - 69% of this machine's 153.6 GB/s peak (8 x 16-bit LPDDR5X-9600), and both</text>
+<text x="40" y="404" font-size="12.5" fill="#1b1f24">backends run the same TernOCL kernels over the same u2 weights. The whole remaining gap is the ~10 ms of non-GEMV</text>
+<text x="40" y="424" font-size="12.5" fill="#1b1f24">graph scaffolding, where the mean op costs 4.9 us and so op *count* is what matters, not op efficiency.</text>
+<text x="24" y="458" font-size="14" font-weight="600" fill="#1b1f24">Decode step, side by side  (ms/token)</text>
+<text x="188" y="487" font-size="11.5" text-anchor="end" fill="#1b1f24">native OpenVINO</text>
+<rect x="200" y="472" width="307.3" height="20" rx="4" fill="#6b4fa8"/>
+<rect x="200" y="472" width="6" height="20" fill="#6b4fa8"/>
+<rect x="509.3" y="472" width="11.9" height="20" rx="4" fill="#c77c1e"/>
+<text x="533.2" y="487" font-size="11.5" font-weight="600" fill="#1b1f24">64.7 ms GEMV  +  2.5 ms overhead</text>
+<text x="188" y="515" font-size="11.5" text-anchor="end" fill="#1b1f24">ggml-openvino</text>
+<rect x="200" y="500" width="312.1" height="20" rx="4" fill="#2f6fb3"/>
+<rect x="200" y="500" width="6" height="20" fill="#2f6fb3"/>
+<rect x="514.1" y="500" width="49.9" height="20" rx="4" fill="#c77c1e"/>
+<text x="576.0" y="515" font-size="11.5" font-weight="600" fill="#1b1f24">65.7 ms GEMV  +  10.5 ms overhead</text>
+<rect x="200" y="532" width="12" height="12" rx="2" fill="#c77c1e"/>
+<text x="218" y="542" font-size="11.5" fill="#6b7480">non-GEMV overhead - same GEMV term on both sides, so this band is the entire 1.12x.</text>
+</svg>
