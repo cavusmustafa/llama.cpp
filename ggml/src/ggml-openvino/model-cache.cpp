@@ -150,6 +150,12 @@ bool make_dirs(const std::string & path) {
         // Create each intermediate component (skip a leading "/" root).
         if (sep && acc.size() > 1) {
             std::string component = acc.substr(0, acc.size() - 1);
+#if defined(_WIN32)
+            // A drive root such as "D:" cannot be mkdir'ed (EACCES, not EEXIST).
+            if (component.size() == 2 && component[1] == ':') {
+                continue;
+            }
+#endif
             if (!make_dir(component)) {
                 return false;
             }
@@ -167,8 +173,9 @@ bool ggml_openvino_model_cache_only() {
 static const char * cache_settings[] = {
     "GGML_OPENVINO_REQUANT_KQUANT",
     "GGML_OPENVINO_NATIVE_SOFTPLUS",
-    "GGML_OPENVINO_DISABLE_KV_SLICE",
+    "GGML_OPENVINO_KV_SLICE",
     "GGML_OPENVINO_MANUAL_GQA_ATTN",
+    "GGML_OPENVINO_EXACT_ZERO_POINT",
     "GGML_OPENVINO_STATEFUL_EXECUTION",
     "GGML_OPENVINO_DISABLE_KV_STATE_RELAYOUT",
     "GGML_OPENVINO_DISABLE_REMOTE_OUTPUTS",

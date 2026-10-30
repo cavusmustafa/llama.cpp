@@ -196,6 +196,17 @@ std::string GgmlOvDecoder::get_tensor_name(const ggml_cgraph * cgraph, const ggm
         if (leaf != cgraph->leafs + cgraph->n_leafs) {
             return std::string(tensor->name) + "#l" + std::to_string(leaf - cgraph->leafs);
         }
+        if (cgraph->leafs == nullptr || cgraph->n_leafs == 0) {
+            // ggml_graph_view sets n_leafs to 0, loop over all node srcs to give each leaf a unique name
+            for (int i = 0; i < cgraph->n_nodes; i++) {
+                auto *cur_node = cgraph->nodes[i];
+                for (int j = 0; j < GGML_MAX_SRC; j++) {
+                    if (cur_node->src[j] == tensor) {
+                        return std::string(tensor->name) + "#l" + std::to_string(i * GGML_MAX_SRC + j);
+                    }
+                }
+            }
+        }
     }
     return tensor->name;
 }
@@ -291,6 +302,33 @@ void GgmlOvDecoder::set_input_output() {
 
         m_node_info_list.push_back(current_node_info);
     }
+}
+
+// True if the GDN attention output is only read by rms_norm (gated norm, e.g. qwen3.5) and the state by
+// cache writeback CPYs. Then q may be pre-scaled, since rms_norm cancels the scale. Static (NPU) path only.
+bool GgmlOvDecoder::is_gdn_out_prescaled(const ggml_tensor * gdn) const {
+    if (!ggml_openvino_is_npu()) {
+        return false;
+    }
+    bool has_norm = false;
+    for (int i = 0; i < m_cgraph->n_nodes; i++) {
+        const ggml_tensor * n = m_cgraph->nodes[i];
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            const ggml_tensor * s = n->src[j];
+            if (s == gdn && n->op != GGML_OP_VIEW) {
+                return false;
+            }
+            if (s == nullptr || s->op != GGML_OP_VIEW || s->src[0] != gdn) {
+                continue;
+            }
+            if (n->op == GGML_OP_RMS_NORM) {
+                has_norm = true;
+            } else if (n->op != GGML_OP_CPY) {
+                return false;
+            }
+        }
+    }
+    return has_norm;
 }
 
 int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
@@ -414,6 +452,14 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
         }
         break;
     }
+    case GGML_OP_SET_ROWS: {
+        // `-fa off` writes the V cache transposed, through a [1, n] reshape of the cache: one element per row
+        if (node->src[2] != nullptr && node->src[2]->op == GGML_OP_RESHAPE && node->src[2]->ne[0] == 1 &&
+            is_kvcache(node->src[2]->src[0], nullptr)) {
+            op_case = 1;
+        }
+        break;
+    }
     case GGML_OP_MUL_MAT: {
         if (node->src[1]->op == GGML_OP_SOFT_MAX) {
             // In the case of `-fa off`, softmax is used, v_trans=true, the dynamic dim is ne[0] for cache_v
@@ -533,8 +579,14 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
                 // GDN attention is routed directly to this VIEW by get_output_names().
                 op_case = 3;
             } else if (node->src[0]->src[0]->op == GGML_OP_GATED_DELTA_NET) {
-                op_case = 2;
+                op_case = is_gdn_out_prescaled(node->src[0]->src[0]) ? 3 : 2;
             }
+        }
+        break;
+    }
+    case GGML_OP_GATED_DELTA_NET: {
+        if (is_gdn_out_prescaled(node)) {
+            op_case = 1;
         }
         break;
     }
@@ -718,6 +770,16 @@ static int get_swa_window_from_mask(const ggml_tensor * mask) {
     return window > 0 ? (int) window : -1;
 }
 
+// The KQ product that the SOFT_MAX of an attention reads: directly, or through the logit soft-capping of gemma-2
+// (SCALE, TANH, SCALE)
+static const ggml_tensor * softmax_scores_source(const ggml_tensor * scores) {
+    while (scores != nullptr && (scores->op == GGML_OP_SCALE ||
+                                 (scores->op == GGML_OP_UNARY && ggml_get_unary_op(scores) == GGML_UNARY_OP_TANH))) {
+        scores = scores->src[0];
+    }
+    return scores;
+}
+
 std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgraph * cgraph, bool is_static) {
     ModelParams model_params;
     ComputeParams compute_params;
@@ -760,12 +822,12 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
                 break;
             }
             break;
-        case GGML_OP_SOFT_MAX:
-            // case 2: node op is SOFT_MAX, src 0 not null & op is MUL_MAT & the src 0 of MUL_MAT is PERMUTE & the permuted tensor src is the view of cache k
-            if (node->src[0] != nullptr && node->src[1] != nullptr && node->src[0]->op == GGML_OP_MUL_MAT &&
-                node->src[0]->src[0] != nullptr && node->src[0]->src[1] != nullptr &&
-                node->src[0]->src[0]->op == GGML_OP_PERMUTE && node->src[0]->src[0]->src[0] != nullptr &&
-                node->src[0]->src[0]->src[0]->op == GGML_OP_VIEW) {
+        case GGML_OP_SOFT_MAX: {
+            // case 2: node op is SOFT_MAX, its scores come from a MUL_MAT (see softmax_scores_source) & the src 0 of MUL_MAT is PERMUTE & the permuted tensor src is the view of cache k
+            const ggml_tensor * kq = softmax_scores_source(node->src[0]);
+            if (kq != nullptr && node->src[1] != nullptr && kq->op == GGML_OP_MUL_MAT && kq->src[0] != nullptr &&
+                kq->src[1] != nullptr && kq->src[0]->op == GGML_OP_PERMUTE && kq->src[0]->src[0] != nullptr &&
+                kq->src[0]->src[0]->op == GGML_OP_VIEW) {
                 return 2;
             }
             // case 3: node op is SOFT_MAX, src 0 not null & op is ADD & the src 0 of ADD is MUL_MAT & the src 0 of MUL_MAT is PERMUTE
@@ -775,6 +837,7 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
                 return 3;
             }
             break;
+        }
         default:
             break;
         }
@@ -792,6 +855,22 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
         case 2:
         case 3:
             return node->src[1];
+        default:
+            return nullptr;
+        }
+    };
+
+    // The PERMUTE of the K cache view an attention node reads, for the same src layouts
+    auto get_attention_cache_k_permute = [&get_attention_pattern_case](const ggml_tensor * node) -> ggml_tensor * {
+        switch (get_attention_pattern_case(node)) {
+        case 0:
+            return node->src[1];
+        case 1:
+            return node->src[1]->src[0];
+        case 2:
+            return softmax_scores_source(node->src[0])->src[0];
+        case 3:
+            return node->src[0]->src[0]->src[0];
         default:
             return nullptr;
         }
@@ -830,14 +909,7 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             if (mask == nullptr) {
                 continue;
             }
-            const ggml_tensor * cache_k_permute = nullptr;
-            switch (get_attention_pattern_case(cgraph->nodes[i])) {
-            case 0:  cache_k_permute = cgraph->nodes[i]->src[1];                     break;
-            case 1:  cache_k_permute = cgraph->nodes[i]->src[1]->src[0];             break;
-            case 2:  cache_k_permute = cgraph->nodes[i]->src[0]->src[0];             break;
-            default: cache_k_permute = cgraph->nodes[i]->src[0]->src[0]->src[0];     break;
-            }
-            const ggml_tensor * cache_k_view = cache_k_permute->src[0];
+            const ggml_tensor * cache_k_view = get_attention_cache_k_permute(cgraph->nodes[i])->src[0];
             if (cache_k_view->op != GGML_OP_VIEW) {
                 continue;
             }
@@ -901,26 +973,28 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
     bool rope_seen = false;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
+        // `-fa off` stores the V cache transposed: SET_ROWS writes it through a [1, n] reshape, one element per row
+        if (node->op == GGML_OP_SET_ROWS && node->src[2] != nullptr && node->src[2]->op == GGML_OP_RESHAPE &&
+            node->src[2]->ne[0] == 1 && is_kvcache(node->src[2]->src[0], nullptr)) {
+            model_params.v_trans = true;
+        }
+        if (node->op == GGML_OP_FLASH_ATTN_EXT) {
+            float logit_softcap = 0.0f;
+            memcpy(&logit_softcap, (const float *) node->op_params + 2, sizeof(float));
+            model_params.softcap_attn = model_params.softcap_attn || logit_softcap != 0.0f;
+        }
         const int attention_pattern_case = get_attention_pattern_case(node);
         if (attention_pattern_case != -1) {
-            ggml_tensor * cache_k_permute = nullptr;
+            ggml_tensor * cache_k_permute = get_attention_cache_k_permute(node);
             ggml_tensor * mask = nullptr;
 
             switch (attention_pattern_case) {
             case 0:
-                cache_k_permute = node->src[1];
-                mask = node->src[3];
-                break;
             case 1:
-                cache_k_permute = node->src[1]->src[0];
                 mask = node->src[3];
                 break;
             case 2:
-                cache_k_permute = node->src[0]->src[0];
-                mask = node->src[1];
-                break;
             case 3:
-                cache_k_permute = node->src[0]->src[0]->src[0];
                 mask = node->src[1];
                 break;
             case 4:
@@ -987,7 +1061,10 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
                 compute_params.mask_name = mask_name;
             }
             if (is_static) {
-                compute_params.attention_size = model_params.ctx_per_seq;
+                const bool slice_prefill = ggml_openvino_kv_slice_enabled() && compute_params.input_len > 1;
+                if (!slice_prefill) {
+                    compute_params.attention_size = model_params.ctx_per_seq;
+                }
                 compute_params.attention_size_swa = model_params.ctx_per_seq_swa;
                 compute_params.token_len_per_seq = 1;
             }
@@ -1007,7 +1084,7 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             node->src[0]->src[0]->op == GGML_OP_VIEW) {
             compute_params.attention_size = node->ne[0];
             compute_params.mask_name.clear();
-            if (is_static) {
+            if (is_static && !(ggml_openvino_kv_slice_enabled() && compute_params.input_len > 1)) {
                 compute_params.attention_size = model_params.ctx_per_seq;
             }
         }
@@ -1132,6 +1209,7 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
     if (m_naive) {
         return input != nullptr ? ov::PartialShape{get_shape(input)} : ov::PartialShape{get_shape(op)};
     }
+    const std::string name = input != nullptr ? std::string(input->name) : std::string();
     ov::PartialShape input_shape;
 
     if (is_inp_tok(input, op) || is_inp_pos(input, op)) {
@@ -1157,7 +1235,15 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
     } else if (is_inp_mask(input, op)) {
         // mask
         if (m_is_static) {
-            input_shape = ov::PartialShape{1, 1, m_is_prefill ? m_prefill_chunk_size : 1, m_model_params.ctx};
+            // The sliding-window mask spans the window cache, which is smaller than the context once
+            // the context exceeds n_swa + n_ubatch (gemma-4 at -c 4096 -ub 1024: 1536 vs 4096 cells).
+            // Both masks are named "attn_inp_kq_mask", so tell them apart by tensor identity.
+            const bool swa_mask = is_swa_mask(input);
+            int attention_size = swa_mask ? m_model_params.ctx_per_seq_swa * m_model_params.n_seq : m_model_params.ctx;
+            if (m_is_prefill && ggml_openvino_kv_slice_enabled()) {
+                attention_size = swa_mask ? m_compute_params.attention_size_swa : m_compute_params.attention_size;
+            }
+            input_shape = ov::PartialShape{1, 1, m_is_prefill ? m_prefill_chunk_size : 1, attention_size};
         } else if (m_is_stateful) {
             input_shape = ov::PartialShape{1, 1, -1, -1};
         } else {
@@ -1180,6 +1266,13 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
         if (!m_is_static && !is_flat_kv) {
             // do not fix ctx size to make llama-bench work across test params
             input_shape[2] = -1;
+        } else if (m_is_prefill && ggml_openvino_kv_slice_enabled()) {
+            const auto layer = extract_layer_from_name(name);
+            if (layer.has_value() && !is_swa_layer(*layer) && m_compute_params.attention_size > 0 &&
+                m_compute_params.attention_size < input_shape[2].get_length()) {
+                const int attention_size = m_compute_params.attention_size;
+                input_shape[2] = attention_size;
+            }
         }
         if ((is_stateful() && !is_flat_kv) || is_kvcache_4d(input)) {
             // Convert stateless KV cache layout [1, 1, seq, n_heads_kv * head_size]
@@ -1267,6 +1360,8 @@ bool GgmlOvDecoder::is_s_copy_leaf(const ggml_tensor * tensor) const {
 }
 
 void GgmlOvDecoder::add_extra_inputs() {
+    m_model_extra_inputs.clear();
+
     // Extra inputs:
     // 1. `attention_size`, used in FLASH_ATTN where the shape of the matmul's are 256 aligned,
     //     see llama_kv_cache_unified::get_n_kv and llama_kv_cache_unified::get_padding.
@@ -1294,6 +1389,31 @@ void GgmlOvDecoder::add_extra_inputs() {
     create_1d_input("seq_active_end", m_compute_params.seq_active_start + m_compute_params.n_seq_active);
     if (m_compute_params.token_len_per_seq != -1) {
         create_1d_input("token_len_per_seq", m_compute_params.token_len_per_seq);
+    }
+    if (m_is_static && m_is_prefill && ggml_openvino_npu_hfa_prefill_enabled()) {
+        if (m_compute_params.n_seq_active != 1) {
+            throw std::runtime_error("GGML_OPENVINO_NPU_HFA_PREFILL currently requires one active sequence");
+        }
+        if (!m_model_params.swa_layers.empty()) {
+            throw std::runtime_error("GGML_OPENVINO_NPU_HFA_PREFILL does not yet support sliding-window layers");
+        }
+        const auto chunk_size = static_cast<size_t>(m_prefill_chunk_size);
+        const auto input_len = static_cast<size_t>(m_compute_params.input_len);
+        const auto num_chunks = (input_len + chunk_size - 1) / chunk_size;
+        const auto past_capacity = std::max(chunk_size, (num_chunks - 1) * chunk_size);
+        for (const auto & [kv_name, kv_tensor] : m_inputs) {
+            if (kv_name.rfind("cache_k_l", 0) != 0 && kv_name.rfind("cache_v_l", 0) != 0) {
+                continue;
+            }
+            const auto n_heads_kv = static_cast<size_t>(get_n_heads_kv_for_tensor(kv_tensor));
+            const auto combined_dim = static_cast<size_t>(kv_tensor->ne[0]);
+            GGML_ASSERT(n_heads_kv > 0 && combined_dim % n_heads_kv == 0);
+            const auto head_size = combined_dim / n_heads_kv;
+            m_model_extra_inputs["ggml_hfa_past_" + kv_name] = {
+                get_ov_type(kv_tensor), ov::Shape{1, n_heads_kv, past_capacity, head_size}, 0, true, {}, -1};
+        }
+        m_model_extra_inputs["ggml_hfa_mask"] = {
+            ov::element::f16, ov::Shape{1, 1, chunk_size, past_capacity + chunk_size}, 0, true, {}, -1};
     }
     // create_1d_input("token_len", m_compute_params.token_len_per_seq * m_compute_params.n_seq_active);
 
@@ -1497,6 +1617,12 @@ bool GgmlOvDecoder::is_kvcache_4d(const ggml_tensor * cache) const {
     if (!enabled || m_is_static || m_is_stateful || m_model_is_splitted || !ggml_openvino_is_gpu()) {
         return false;
     }
+    // `-fa off` (transposed V cache): keep the [1, 1, ctx, n_heads_kv * head_size] layout. The 4-D K cache breaks the
+    // MUL_MAT attention of the Phi-3 models (Phi-3.5 mini, Phi-4 mini), and the soft-capped manual attention of
+    // gemma-2 with `-fa on` ("could not construct a memory descriptor using strides" in the GPU plugin's oneDNN path).
+    if (m_model_params.v_trans || m_model_params.softcap_attn) {
+        return false;
+    }
     if (cache->op != GGML_OP_NONE || cache->view_src != nullptr || !is_kvcache(cache, nullptr)) {
         return false;
     }
@@ -1545,6 +1671,21 @@ bool GgmlOvDecoder::is_kvcache_4d(const ggml_tensor * cache) const {
     return true;
 }
 
+bool GgmlOvDecoder::is_kvcache_token_rows(const ggml_tensor * cache) const {
+    for (int i = 0; i < m_cgraph->n_nodes; i++) {
+        const auto * node = m_cgraph->nodes[i];
+        if (node->op != GGML_OP_SET_ROWS) {
+            continue;
+        }
+        // SET_ROWS writes whole rows of src[2], which is the cache or a view of it
+        const auto * dst = node->src[2];
+        if (dst != nullptr && (dst == cache || dst->view_src == cache) && dst->ne[0] != cache->ne[0]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 const ggml_tensor * GgmlOvDecoder::get_tensor_from_name(const std::string & name) const {
     for (int i = 0; i < m_cgraph->n_nodes; i++) {
         const auto * node = m_cgraph->nodes[i];
@@ -1559,6 +1700,16 @@ const ggml_tensor * GgmlOvDecoder::get_tensor_from_name(const std::string & name
         }
     }
     return nullptr;
+}
+
+std::string GgmlOvDecoder::get_hfa_history_input_name() const {
+    for (const auto & [name, tensor] : m_inputs) {
+        const auto * op = get_tensor_used_op(tensor);
+        if (op != nullptr && is_inp_pos(tensor, op)) {
+            return name;
+        }
+    }
+    throw std::runtime_error("HFA prefill position input was not found");
 }
 
 std::map<std::string, std::string> GgmlOvDecoder::get_kv_param_res_names() const {
@@ -1719,14 +1870,19 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor
     if (ggml_is_quantized(tensor->type)) {
         auto use_bias = naive;
         if (is_ov_buffer) {
-            // For quantized weights, copy raw data to a temp buffer first because
-            // process_weight_tensor reads from data and writes extracted results
-            // (weights/scales/zp) to output_base_ptr — they would overlap if both
-            // point to tensor->data.
-            size_t raw_size = ggml_nbytes(tensor);
-            std::vector<uint8_t> tmp(raw_size);
-            memcpy(tmp.data(), tensor->data, raw_size);
-            ov_weight = process_weight_tensor(tensor, tmp.data(), tensor->data, use_bias);
+            const bool preserve_raw = ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_BLOB") != 0;
+            if (preserve_raw) {
+                // A later context must fingerprint the same raw GGUF bytes before importing its
+                // self-contained blob, so keep the model buffer immutable in this mode.
+                ov_weight = process_weight_tensor(tensor, tensor->data, nullptr, use_bias);
+            } else {
+                // The regular path stores extracted weights in the model buffer. Copy raw data
+                // first because input and output ranges would otherwise overlap.
+                size_t raw_size = ggml_nbytes(tensor);
+                std::vector<uint8_t> tmp(raw_size);
+                memcpy(tmp.data(), tensor->data, raw_size);
+                ov_weight = process_weight_tensor(tensor, tmp.data(), tensor->data, use_bias);
+            }
         } else {
             ov_weight = process_weight_tensor(tensor, tensor->data, nullptr, use_bias);
         }
