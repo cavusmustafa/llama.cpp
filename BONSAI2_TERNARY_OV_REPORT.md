@@ -83,39 +83,46 @@ BF16 rather than ternary; they correctly fall through to the stock path. Every u
 
 ## 4. Performance
 
-Same GPU, same model file, t/s. Every row below is on the **latest PR #38460 head**
-(`4185ce2f15`, 2026-10-20) with GenAI `6a35b97b` built in as an extra module. ggml-openvino runs
-`GGML_OPENVINO_ENABLE_KV_4D=1 GGML_OPENVINO_DISABLE_KV_SLICE=1`. Decode is measured with
-`-n <N> -r 5` **on its own** and prefill with `-p 128,512 -r 3`; the measurement note at the end of
-this section explains why that matters.
+Same GPU, same model file, t/s. Every row is on **OpenVINO master** (`5d07300df3`, 2026-10-30),
+which now contains PR #38460 (merged as `f4e23bfdf1`), with OpenVINO GenAI master (`49237dab`)
+built in. ggml-openvino is this branch **after syncing with `ravi9/dev_backend_openvino` @
+`02d71ff9e`**. Decode is measured with `-n <N> -r 5` **on its own** and prefill with
+`-p 128,512 -r 3`; the measurement note at the end of this section explains why.
 
 | configuration | pp128 | pp512 | tg32 | tg128 |
 |---|---:|---:|---:|---:|
-| **OpenVINO GenAI** (`VLMPipeline`, `llm_bench`) | 256.2 | **657.9** | **14.63** | **14.53** |
-| **OpenVINO GenAI**, int8 prefill | **638.2** | **715.1** | - | - |
-| **ggml-openvino** (this work) | 236.5 | 544.2 | 13.21 | 13.21 |
-| **ggml-openvino**, int8 prefill | 545.8 | 575.1 | - | - |
+| **OpenVINO GenAI** (`VLMPipeline`, `llm_bench`) | 258.1 | **680.0** | **14.64** | **14.57** |
+| **OpenVINO GenAI**, int8 prefill | **668.6** | **740.4** | - | - |
+| **ggml-openvino**, `ENABLE_KV_4D=1 KV_SLICE=0` | 236.9 | 536.1 | 13.27 | 13.28 |
+| **ggml-openvino**, default settings | 236.2 | 541.4 | 13.14 | 13.16 |
+| **ggml-openvino**, int8 prefill | 546.8 | 570.9 | - | - |
+| ggml-openvino before the sync (same OpenVINO) | 236.3 | 544.7 | 13.19 | 13.23 |
 | **ggml-vulkan** | 171.2 | 169.5 | 12.70 | 12.70 |
 | ggml-openvino, TernOCL disabled | 1.4 | - | 1.24 | - |
 
-"int8 prefill" means **`OV_GPU_TERNOCL_INT2_INT8_PREFILL=1`**. Current PR heads read only that
-name; the old `OV_TERNOCL_INT2_INT8_PREFILL=1` is **silently ignored** there (pp128 stays at the
-default 236.75 on this build, verified). Builds up to `5c6d4692ee` read only the old name.
+"int8 prefill" means **`OV_GPU_TERNOCL_INT2_INT8_PREFILL=1`**. The old
+`OV_TERNOCL_INT2_INT8_PREFILL=1` is **silently ignored** by current builds (verified: pp128 stays at
+the default). Builds up to the PR revision `5c6d4692ee` read only the old name.
 
-GenAI / ggml-openvino: pp128 **1.08x**, pp512 **1.21x**, decode **1.10-1.11x** (int8 prefill on
-both: 1.17x / 1.24x). ggml-openvino / Vulkan: pp512 **3.21x** (3.39x with int8 prefill), decode
-**1.04x**.
+GenAI / ggml-openvino: pp128 **1.09x**, pp512 **1.27x**, decode **1.10x** (int8 prefill on both:
+1.22x / 1.30x). ggml-openvino / Vulkan: pp512 **3.16x** (3.37x with int8 prefill), decode **1.05x**.
+
+**The sync is neutral on this model.** Against the pre-sync branch on the same OpenVINO, decode
+moves 13.23 -> 13.28 (+0.4%) and prefill stays within noise. The 69 synced backend commits target
+other models, NPU and `-fa off`; none touches the GDN/ternary path's hot ops. Two side effects:
+the defaults are now almost as fast as the tuned settings (13.16 vs 13.28), and
+`GGML_OPENVINO_DISABLE_KV_SLICE` is gone. Its replacement, `GGML_OPENVINO_KV_SLICE` (default 1),
+no longer affects Bonsai decode (13.28 at both 0 and 1).
+
+**OpenVINO master vs the PR head:** ggml-openvino is unchanged (13.28 vs 13.21 t/s tg128, separate
+sessions), while GenAI prefill improved (pp512 658 -> 680, int8 715 -> 740).
 
 The GenAI rows are real `openvino_genai.VLMPipeline`, run with the PR doc's `llm_bench` recipe on
 the u2 IR plus the Qwen3.5 tokenizer, config and vision encoders from the template export (Bonsai 2
-is a Qwen3.5 VLM to GenAI; text prompts never run the vision encoders). Prefill t/s is prompt tokens
-/ first-token latency at an exact 128- or 512-token prompt (`genai_prompts/p{128,512}.jsonl`,
-verified by llm_bench's reported input size); decode is llm_bench's 2nd-token throughput over 32
-and 128 new tokens. The generated text matches the reference opening ("The user wants a concise
-explanation of photosynthesis..."). Reproduce with `bench_genai.sh` (paths point at `../ov-bonsai2/`).
-
-The newer PR head costs ggml-openvino about **2% of decode** against the earlier build
-(13.21 vs 13.47 t/s, measured back to back in one session); prefill is flat to slightly up.
+is a Qwen3.5 VLM to GenAI; text prompts never run the vision encoders). Prefill t/s is prompt
+tokens / first-token latency at an exact 128- or 512-token prompt (`genai_prompts/p{128,512}.jsonl`,
+verified by llm_bench's reported input size); decode is llm_bench's 2nd-token throughput. Output
+text was checked coherent on every build. The whole table is reproduced by `bench_master.sh`.
 
 #### The same comparison on the earlier PR build (`5c6d4692ee`)
 
@@ -135,16 +142,17 @@ end-to-end check that the GGUF -> IR weight mapping is correct.
 
 ### Prefill
 
-ggml-openvino is **3.21x ggml-vulkan at pp512** (544 vs 169), and **3.39x** with int8 prefill
-(575). Vulkan is flat from pp128 to pp512 (171 -> 169) while OV scales (236 -> 544), which is what a
+ggml-openvino is **3.16x ggml-vulkan at pp512** (536 vs 169), and **3.37x** with int8 prefill
+(571). Vulkan is flat from pp128 to pp512 (171 -> 169) while OV scales (237 -> 536), which is what a
 tiled DPAS GEMM should do against a per-token kernel.
 
 Int8 prefill is off by default in the PR but is a large win at short prompts: **2.3x at pp128**
-(236 -> 546), 1.06x at pp512. Greedy output was byte-identical to the default over 90 tokens.
+(237 -> 547), 1.06x at pp512. Greedy output was byte-identical to the default over 90 tokens.
 
-Against GenAI, ggml-openvino prefill is close: 1.08x at pp128 and 1.21x at pp512 (1.17x / 1.24x with
-int8 prefill on both). Unlike the dense and MoE models measured before, there is no large prefill
-integration gap on this architecture; the remaining headroom is mostly in decode.
+Against GenAI, ggml-openvino prefill is close at short prompts (1.09x at pp128) and further behind
+at pp512 (1.27x; 1.22x / 1.30x with int8 prefill on both). The pp512 gap widened on OpenVINO master
+because GenAI's prefill improved and ggml-openvino's did not. Even so, the larger remaining
+integration gap per token is decode.
 
 ### Decode
 
@@ -331,7 +339,8 @@ Decode, `-n 32,128 -r 5`, each config run on its own (see the measurement note b
 | `GGML_OPENVINO_STATEFUL_EXECUTION=1` (llama-cli) | - | 12.8 |
 
 So shape-from-mask is worth ~2.7% and KV_4D ~1.4%, **+5.1% together** over pre-graft. Adding
-`GGML_OPENVINO_DISABLE_KV_SLICE=1` is worth a further 1.6% with prefill unchanged, for **+6.8%**
+(This knob was later replaced by `GGML_OPENVINO_KV_SLICE`, default 1; after the 2026-10-30 sync it no longer
+affects Bonsai decode - see §4.) At the time, `GGML_OPENVINO_DISABLE_KV_SLICE=1` was worth a further 1.6% with prefill unchanged, for **+6.8%**
 total (12.24 -> 13.07) and a 1.15x remaining gap. Stateful execution is worth only +2.4% on this
 model and currently **fails llama-bench's generation warmup** (`failed to decode generation batch,
 res = -3`) while working fine under llama-cli, so it is not usable for benchmarking here.
@@ -398,13 +407,14 @@ Three traps that silently produce wrong numbers:
 ## 6. Open items
 
 - Tile tables are Xe2-tuned; this GPU is Xe3, so prefill numbers are a floor, not a ceiling.
-- **Decode gap to GenAI, 1.10x.** Root-caused in §4.1 (non-GEMV graph overhead; the GPU is
+- **Decode gap to GenAI, 1.10x** (on OpenVINO master, after the sync). Root-caused in §4.1 (non-GEMV graph overhead; the GPU is
   saturated on both paths). The largest remaining item is the f32 recurrent-state boundary
   (§4.3), which needs a device-resident state rather than a local change.
-- **The newer PR head costs ~2% of ggml-openvino decode** (13.47 -> 13.21). Not bisected.
+- **The newer PR / OpenVINO master costs ~1.5% of ggml-openvino decode** vs PR revision
+  `5c6d4692ee` (13.47 -> 13.28). Not bisected.
 - Int8 prefill looks like it should be the default for this model, but that is the PR author's
   call and needs a GSM8K/WWB-style accuracy check, not a 90-token diff.
 - ggml-openvino has no PTQ1_0 support (Bonsai 1).
 - The 5 pre-existing `GATED_DELTA_NET` op failures on `dev_backend_openvino` are unrelated to this
   work but affect `raw_gates` / `rows_mode` paths this arch family can use.
-- Pushed to `cavusmustafa/llama.cpp` branch `prism_ov_ternary_kv4d`; no PR is open.
+- Pushed to `cavusmustafa/llama.cpp` branch `prism_ov_ternary_sync` (synced; supersedes `prism_ov_ternary_kv4d`); no PR is open.

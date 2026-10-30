@@ -69,7 +69,7 @@ Hadamard rotation at run time, what had to change in llama.cpp's OpenVINO backen
 on an Intel GPU, and where its decode time actually goes.</p>
 <p>Written to be readable without prior knowledge of this codebase. Measured numbers and the terse
 engineering version are in <code>BONSAI2_TERNARY_OV_REPORT.md</code>; this file explains the <em>why</em>.</p>
-<p>Last updated 2026-10-17: sections 8 and 9 are new or rewritten.</p></div>
+<p>Last updated 2026-10-30 (results on OpenVINO master); 2026-10-17: sections 8 and 9 are new or rewritten.</p></div>
   <div class="tabs" role="tablist" aria-label="Sections"><button class="tab" role="tab" id="btn-tab-0-tl-dr" aria-controls="tab-0-tl-dr" aria-selected="true" tabindex="0">TL;DR</button><button class="tab" role="tab" id="btn-tab-1-1-what-the-model-is" aria-controls="tab-1-1-what-the-model-is" aria-selected="false" tabindex="-1">1. What the model is</button><button class="tab" role="tab" id="btn-tab-2-2-how-pq2-0-stores-a-ternary-weight" aria-controls="tab-2-2-how-pq2-0-stores-a-ternary-weight" aria-selected="false" tabindex="-1">2. How PQ2_0 stores a ternary weight</button><button class="tab" role="tab" id="btn-tab-3-3-the-twist-the-weights-live-in-a-rotate" aria-controls="tab-3-3-the-twist-the-weights-live-in-a-rotate" aria-selected="false" tabindex="-1">3. The twist: the weights live in a rotated basis</button><button class="tab" role="tab" id="btn-tab-4-4-teaching-the-openvino-backend-to-read-" aria-controls="tab-4-4-teaching-the-openvino-backend-to-read-" aria-selected="false" tabindex="-1">4. Teaching the OpenVINO backend to read PQ2_0</button><button class="tab" role="tab" id="btn-tab-5-5-the-four-fixes" aria-controls="tab-5-5-the-four-fixes" aria-selected="false" tabindex="-1">5. The four fixes</button><button class="tab" role="tab" id="btn-tab-6-6-the-debugging-lesson" aria-controls="tab-6-6-the-debugging-lesson" aria-selected="false" tabindex="-1">6. The debugging lesson</button><button class="tab" role="tab" id="btn-tab-7-7-how-one-compiled-model-uses-two-differ" aria-controls="tab-7-7-how-one-compiled-model-uses-two-differ" aria-selected="false" tabindex="-1">7. How one compiled model uses two different kernels</button><button class="tab" role="tab" id="btn-tab-8-8-results" aria-controls="tab-8-8-results" aria-selected="false" tabindex="-1">8. Results</button><button class="tab" role="tab" id="btn-tab-9-9-closing-the-decode-gap" aria-controls="tab-9-9-closing-the-decode-gap" aria-selected="false" tabindex="-1">9. Closing the decode gap</button><button class="tab" role="tab" id="btn-tab-10-10-what-you-need-to-run-it" aria-controls="tab-10-10-what-you-need-to-run-it" aria-selected="false" tabindex="-1">10. What you need to run it</button></div>
   <section class="panel is-active" role="tabpanel" id="tab-0-tl-dr" aria-labelledby="btn-tab-0-tl-dr"><h2>TL;DR</h2><table>
 <thead>
@@ -93,7 +93,7 @@ engineering version are in <code>BONSAI2_TERNARY_OV_REPORT.md</code>; this file 
 </tr>
 <tr>
 <td><strong>Outcome</strong></td>
-<td>Correct output, <strong>3.21x faster prefill than Vulkan</strong> (544 vs 169 t/s), and decode improved 12.24 -&gt; 13.46 t/s. On the latest PR build, real <strong>OpenVINO GenAI</strong> is 1.10x ahead on decode and 1.21x on prefill.</td>
+<td>Correct output, <strong>3.16x faster prefill than Vulkan</strong> (536 vs 169 t/s), and decode improved 12.24 -&gt; 13.46 t/s. On OpenVINO master, real <strong>OpenVINO GenAI</strong> is 1.10x ahead on decode and 1.27x on pp512.</td>
 </tr>
 <tr>
 <td><strong>Biggest surprise</strong></td>
@@ -1126,13 +1126,13 @@ default path is not. On this model it was harmless - default and int8 prefill we
 byte-identical over 90 greedy tokens here, and the PR author reports GSM8K within the standard
 error of the default. It is still the reason the switch is opt-in rather than the default: that is
 the PR author's call to make, and it needs a real accuracy harness rather than a 90-token diff.</p>
-<p>Measured here: <strong>pp128 236 -&gt; 546 t/s (2.3x)</strong> and <strong>pp512 544 -&gt; 575 t/s (1.06x)</strong>. The gain is
+<p>Measured here: <strong>pp128 237 -&gt; 547 t/s (2.3x)</strong> and <strong>pp512 536 -&gt; 571 t/s (1.06x)</strong>. The gain is
 much larger at short prompts because at pp512 the default path is already close to saturating the
 machine, so there is less headroom left to recover.</p>
 <hr /></section><section class="panel" role="tabpanel" id="tab-8-8-results" aria-labelledby="btn-tab-8-8-results" hidden><h2>8. Results</h2><p><figure class="fig"><svg class="diagram" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700" font-family="Segoe UI, Helvetica, Arial, sans-serif">
 <rect width="1000" height="700" fill="#ffffff"/>
-<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">Measured results - Bonsai 2 27B PQ2_0, latest PR #38460 head</text>
-<text x="24" y="56" font-size="13" fill="#6b7480">Intel Arc B390 iGPU (Xe3), one OpenVINO build (4185ce2f15) for every bar. Decode measured with -n alone. Higher is better.</text>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">Measured results - Bonsai 2 27B PQ2_0, OpenVINO master (PR #38460 merged)</text>
+<text x="24" y="56" font-size="13" fill="#6b7480">Intel Arc B390 iGPU (Xe3), OpenVINO 5d07300df3 for every OV bar. Decode measured with -n alone. Higher is better.</text>
 <rect x="24" y="72" width="14" height="14" rx="2" fill="#6b4fa8"/>
 <text x="44" y="84" font-size="11.5" fill="#1b1f24">OpenVINO GenAI (VLMPipeline)</text>
 <rect x="256" y="72" width="14" height="14" rx="2" fill="#2f6fb3"/>
@@ -1144,70 +1144,71 @@ machine, so there is less headroom left to recover.</p>
 <text x="24" y="124" font-size="14" font-weight="600" fill="#1b1f24">Prefill, 512-token prompt  (t/s)</text>
 <line x1="215" y1="136" x2="215" y2="256" stroke="#8a93a0"/>
 <text x="205" y="150" font-size="11.5" text-anchor="end" fill="#1b1f24">GenAI int8</text>
-<rect x="216" y="136" width="695.8" height="19" rx="4" fill="#2d8a4e"/>
+<rect x="216" y="136" width="701.4" height="19" rx="4" fill="#2d8a4e"/>
 <rect x="216" y="136" width="6.0" height="19" fill="#2d8a4e"/>
-<text x="919.8" y="150" font-size="11.5" font-weight="600" fill="#1b1f24">715.1</text>
+<text x="925.4" y="150" font-size="11.5" font-weight="600" fill="#1b1f24">740.4</text>
 <text x="205" y="174" font-size="11.5" text-anchor="end" fill="#1b1f24">GenAI</text>
-<rect x="216" y="160" width="640.1" height="19" rx="4" fill="#6b4fa8"/>
+<rect x="216" y="160" width="644.2" height="19" rx="4" fill="#6b4fa8"/>
 <rect x="216" y="160" width="6.0" height="19" fill="#6b4fa8"/>
-<text x="864.1" y="174" font-size="11.5" font-weight="600" fill="#1b1f24">657.9</text>
+<text x="868.2" y="174" font-size="11.5" font-weight="600" fill="#1b1f24">680</text>
 <text x="205" y="198" font-size="11.5" text-anchor="end" fill="#1b1f24">ggml-ov int8</text>
-<rect x="216" y="184" width="559.6" height="19" rx="4" fill="#2d8a4e"/>
+<rect x="216" y="184" width="540.9" height="19" rx="4" fill="#2d8a4e"/>
 <rect x="216" y="184" width="6.0" height="19" fill="#2d8a4e"/>
-<text x="783.6" y="198" font-size="11.5" font-weight="600" fill="#1b1f24">575.1</text>
+<text x="764.9" y="198" font-size="11.5" font-weight="600" fill="#1b1f24">570.9</text>
 <text x="205" y="222" font-size="11.5" text-anchor="end" fill="#1b1f24">ggml-openvino</text>
-<rect x="216" y="208" width="529.5" height="19" rx="4" fill="#2f6fb3"/>
+<rect x="216" y="208" width="507.9" height="19" rx="4" fill="#2f6fb3"/>
 <rect x="216" y="208" width="6.0" height="19" fill="#2f6fb3"/>
-<text x="753.5" y="222" font-size="11.5" font-weight="600" fill="#1b1f24">544.2</text>
+<text x="731.9" y="222" font-size="11.5" font-weight="600" fill="#1b1f24">536.1</text>
 <text x="205" y="246" font-size="11.5" text-anchor="end" fill="#1b1f24">vulkan</text>
-<rect x="216" y="232" width="164.9" height="19" rx="4" fill="#c77c1e"/>
+<rect x="216" y="232" width="160.6" height="19" rx="4" fill="#c77c1e"/>
 <rect x="216" y="232" width="6.0" height="19" fill="#c77c1e"/>
-<text x="388.9" y="246" font-size="11.5" font-weight="600" fill="#1b1f24">169.5</text>
+<text x="384.6" y="246" font-size="11.5" font-weight="600" fill="#1b1f24">169.5</text>
 <text x="24" y="290" font-size="14" font-weight="600" fill="#1b1f24">Prefill, 128-token prompt  (t/s)</text>
 <line x1="215" y1="302" x2="215" y2="422" stroke="#8a93a0"/>
 <text x="205" y="316" font-size="11.5" text-anchor="end" fill="#1b1f24">GenAI int8</text>
-<rect x="216" y="302" width="621.0" height="19" rx="4" fill="#2d8a4e"/>
+<rect x="216" y="302" width="633.4" height="19" rx="4" fill="#2d8a4e"/>
 <rect x="216" y="302" width="6.0" height="19" fill="#2d8a4e"/>
-<text x="845.0" y="316" font-size="11.5" font-weight="600" fill="#1b1f24">638.2</text>
+<text x="857.4" y="316" font-size="11.5" font-weight="600" fill="#1b1f24">668.6</text>
 <text x="205" y="340" font-size="11.5" text-anchor="end" fill="#1b1f24">ggml-ov int8</text>
-<rect x="216" y="326" width="531.0" height="19" rx="4" fill="#2d8a4e"/>
+<rect x="216" y="326" width="518.0" height="19" rx="4" fill="#2d8a4e"/>
 <rect x="216" y="326" width="6.0" height="19" fill="#2d8a4e"/>
-<text x="755.0" y="340" font-size="11.5" font-weight="600" fill="#1b1f24">545.8</text>
+<text x="742.0" y="340" font-size="11.5" font-weight="600" fill="#1b1f24">546.8</text>
 <text x="205" y="364" font-size="11.5" text-anchor="end" fill="#1b1f24">GenAI</text>
-<rect x="216" y="350" width="249.3" height="19" rx="4" fill="#6b4fa8"/>
+<rect x="216" y="350" width="244.5" height="19" rx="4" fill="#6b4fa8"/>
 <rect x="216" y="350" width="6.0" height="19" fill="#6b4fa8"/>
-<text x="473.3" y="364" font-size="11.5" font-weight="600" fill="#1b1f24">256.2</text>
+<text x="468.5" y="364" font-size="11.5" font-weight="600" fill="#1b1f24">258.1</text>
 <text x="205" y="388" font-size="11.5" text-anchor="end" fill="#1b1f24">ggml-openvino</text>
-<rect x="216" y="374" width="230.1" height="19" rx="4" fill="#2f6fb3"/>
+<rect x="216" y="374" width="224.4" height="19" rx="4" fill="#2f6fb3"/>
 <rect x="216" y="374" width="6.0" height="19" fill="#2f6fb3"/>
-<text x="454.1" y="388" font-size="11.5" font-weight="600" fill="#1b1f24">236.5</text>
+<text x="448.4" y="388" font-size="11.5" font-weight="600" fill="#1b1f24">236.9</text>
 <text x="205" y="412" font-size="11.5" text-anchor="end" fill="#1b1f24">vulkan</text>
-<rect x="216" y="398" width="166.6" height="19" rx="4" fill="#c77c1e"/>
+<rect x="216" y="398" width="162.2" height="19" rx="4" fill="#c77c1e"/>
 <rect x="216" y="398" width="6.0" height="19" fill="#c77c1e"/>
-<text x="390.6" y="412" font-size="11.5" font-weight="600" fill="#1b1f24">171.2</text>
+<text x="386.2" y="412" font-size="11.5" font-weight="600" fill="#1b1f24">171.2</text>
 <text x="24" y="456" font-size="14" font-weight="600" fill="#1b1f24">Decode, 128 tokens  (t/s)</text>
 <line x1="215" y1="468" x2="215" y2="540" stroke="#8a93a0"/>
 <text x="205" y="482" font-size="11.5" text-anchor="end" fill="#1b1f24">GenAI</text>
-<rect x="216" y="468" width="653.9" height="19" rx="4" fill="#6b4fa8"/>
+<rect x="216" y="468" width="655.6" height="19" rx="4" fill="#6b4fa8"/>
 <rect x="216" y="468" width="6.0" height="19" fill="#6b4fa8"/>
-<text x="877.9" y="482" font-size="11.5" font-weight="600" fill="#1b1f24">14.53</text>
+<text x="879.6" y="482" font-size="11.5" font-weight="600" fill="#1b1f24">14.57</text>
 <text x="205" y="506" font-size="11.5" text-anchor="end" fill="#1b1f24">ggml-openvino</text>
-<rect x="216" y="492" width="594.5" height="19" rx="4" fill="#2f6fb3"/>
+<rect x="216" y="492" width="597.6" height="19" rx="4" fill="#2f6fb3"/>
 <rect x="216" y="492" width="6.0" height="19" fill="#2f6fb3"/>
-<text x="818.5" y="506" font-size="11.5" font-weight="600" fill="#1b1f24">13.21</text>
+<text x="821.6" y="506" font-size="11.5" font-weight="600" fill="#1b1f24">13.28</text>
 <text x="205" y="530" font-size="11.5" text-anchor="end" fill="#1b1f24">vulkan</text>
 <rect x="216" y="516" width="571.5" height="19" rx="4" fill="#c77c1e"/>
 <rect x="216" y="516" width="6.0" height="19" fill="#c77c1e"/>
 <text x="795.5" y="530" font-size="11.5" font-weight="600" fill="#1b1f24">12.7</text>
 <rect x="24" y="566" width="952" height="96" rx="6" fill="#f7f9fb"/>
 <text x="40" y="591" font-size="13" font-weight="600" fill="#1b1f24">Reading it</text>
-<text x="40" y="614" font-size="12.5" fill="#1b1f24">GenAI leads ggml-openvino by 1.10x on decode and 1.21x on pp512; ggml-openvino leads Vulkan by 3.21x on pp512.</text>
+<text x="40" y="614" font-size="12.5" fill="#1b1f24">GenAI leads ggml-openvino by 1.10x on decode and 1.27x on pp512; ggml-openvino leads Vulkan by 3.16x on pp512.</text>
 <text x="40" y="634" font-size="12.5" fill="#1b1f24">int8 prefill = OV_GPU_TERNOCL_INT2_INT8_PREFILL=1 (prefill only, 2.3x at pp128). The old OV_TERNOCL_... name is ignored here.</text>
 <text x="40" y="654" font-size="11.5" fill="#6b7480">GenAI prefill = prompt tokens / first-token latency (llm_bench); decode = 2nd-token throughput.</text>
 </svg></figure></p>
-<p>Intel Arc B390 iGPU, same GPU and same model file for every row, all on the <strong>latest PR #38460
-head</strong> (<code>4185ce2f15</code>). Decode measured with <code>-n</code> alone and prefill with <code>-p</code> - see the measurement
-note below, which is not a formality.</p>
+<p>Intel Arc B390 iGPU, same GPU and same model file for every row, all on <strong>OpenVINO master</strong>
+(<code>5d07300df3</code>, 2026-10-30), which now includes PR #38460. ggml-openvino is synced with
+<code>ravi9/dev_backend_openvino</code> as of 2026-10-30. Decode measured with <code>-n</code> alone and prefill with
+<code>-p</code> - see the measurement note below, which is not a formality.</p>
 <table>
 <thead>
 <tr>
@@ -1221,29 +1222,29 @@ note below, which is not a formality.</p>
 <tbody>
 <tr>
 <td><strong>OpenVINO GenAI</strong> (<code>VLMPipeline</code>, <code>llm_bench</code>)</td>
-<td style="text-align: right;">256.2</td>
-<td style="text-align: right;"><strong>657.9</strong></td>
-<td style="text-align: right;"><strong>14.63</strong></td>
-<td style="text-align: right;"><strong>14.53</strong></td>
+<td style="text-align: right;">258.1</td>
+<td style="text-align: right;"><strong>680.0</strong></td>
+<td style="text-align: right;"><strong>14.64</strong></td>
+<td style="text-align: right;"><strong>14.57</strong></td>
 </tr>
 <tr>
 <td><strong>OpenVINO GenAI</strong>, int8 prefill</td>
-<td style="text-align: right;"><strong>638.2</strong></td>
-<td style="text-align: right;"><strong>715.1</strong></td>
+<td style="text-align: right;"><strong>668.6</strong></td>
+<td style="text-align: right;"><strong>740.4</strong></td>
 <td style="text-align: right;">-</td>
 <td style="text-align: right;">-</td>
 </tr>
 <tr>
 <td><strong>ggml-openvino</strong> + ternary kernels</td>
-<td style="text-align: right;">236.5</td>
-<td style="text-align: right;">544.2</td>
-<td style="text-align: right;">13.21</td>
-<td style="text-align: right;">13.21</td>
+<td style="text-align: right;">236.9</td>
+<td style="text-align: right;">536.1</td>
+<td style="text-align: right;">13.27</td>
+<td style="text-align: right;">13.28</td>
 </tr>
 <tr>
 <td><strong>ggml-openvino</strong>, int8 prefill</td>
-<td style="text-align: right;">545.8</td>
-<td style="text-align: right;">575.1</td>
+<td style="text-align: right;">546.8</td>
+<td style="text-align: right;">570.9</td>
 <td style="text-align: right;">-</td>
 <td style="text-align: right;">-</td>
 </tr>
@@ -1263,17 +1264,21 @@ note below, which is not a formality.</p>
 </tr>
 </tbody>
 </table>
-<p>"int8 prefill" is <code>OV_GPU_TERNOCL_INT2_INT8_PREFILL=1</code> (section 7). GenAI prefill t/s is prompt
-tokens / first-token latency at an exact 128- or 512-token prompt; GenAI decode is llm_bench's
-2nd-token throughput.</p>
-<p>GenAI / ggml-openvino: pp128 <strong>1.08x</strong>, pp512 <strong>1.21x</strong>, decode <strong>1.10-1.11x</strong> (int8 prefill on
-both: 1.17x / 1.24x). ggml-openvino / Vulkan: pp512 <strong>3.21x</strong> (3.39x with int8 prefill), decode
-<strong>1.04x</strong>.</p>
+<p>"int8 prefill" is <code>OV_GPU_TERNOCL_INT2_INT8_PREFILL=1</code> (section 7). ggml-openvino runs with
+<code>GGML_OPENVINO_ENABLE_KV_4D=1</code>; with plain defaults it is within 1% (13.16 t/s decode). GenAI
+prefill t/s is prompt tokens / first-token latency at an exact 128- or 512-token prompt; GenAI
+decode is llm_bench's 2nd-token throughput.</p>
+<p>GenAI / ggml-openvino: pp128 <strong>1.09x</strong>, pp512 <strong>1.27x</strong>, decode <strong>1.10x</strong> (int8 prefill on both:
+1.22x / 1.30x). ggml-openvino / Vulkan: pp512 <strong>3.16x</strong> (3.37x with int8 prefill), decode
+<strong>1.05x</strong>.</p>
+<p>Syncing with the latest <code>dev_backend_openvino</code> was <strong>neutral</strong> for this model: +0.4% decode
+against the pre-sync branch on the same OpenVINO, prefill within noise. The synced commits target
+other models, the NPU and <code>-fa off</code>.</p>
 <details>
 <p><summary>The same comparison on the earlier PR build (<code>5c6d4692ee</code>)</summary></p>
 <p>The earlier PR revision did not ship a GenAI path; its native-OpenVINO reference was the PR's own
-<code>paged_bench_llm_27b</code> PagedAttention tool, since removed from the PR. That build decodes about 2%
-faster under ggml-openvino (13.47 vs 13.21 t/s, measured back to back).</p>
+<code>paged_bench_llm_27b</code> PagedAttention tool, since removed from the PR. That build decodes about 1.5%
+faster under ggml-openvino (13.47 vs 13.28 t/s on OpenVINO master).</p>
 <table>
 <thead>
 <tr>
@@ -1323,9 +1328,9 @@ faster under ggml-openvino (13.47 vs 13.21 t/s, measured back to back).</p>
 </tbody>
 </table>
 </details>
-<p><strong>Prefill: OpenVINO wins by 3.16x</strong> at a 512-token prompt (3.42x with int8 prefill). The shape of
+<p><strong>Prefill: OpenVINO wins by 3.16x</strong> at a 512-token prompt (3.37x with int8 prefill). The shape of
 the curve is as informative as the ratio - Vulkan is flat from 128 to 512 tokens (171 -&gt; 169 t/s),
-which is what a per-token kernel does, while OpenVINO scales (236 -&gt; 535), which is what a tiled
+which is what a per-token kernel does, while OpenVINO scales (237 -&gt; 536), which is what a tiled
 GEMM does.</p>
 <p><strong>Decode is not a tie.</strong> An earlier version of this page said it was, and that both backends were
 pinned to a ~80 GB/s hardware wall. That was wrong twice over. This machine's memory is
@@ -1544,7 +1549,7 @@ square, 128x128). OpenVINO's own GGUF frontend made the identical change upstrea
 <td>+1.4%</td>
 </tr>
 <tr>
-<td><code>GGML_OPENVINO_DISABLE_KV_SLICE=1</code></td>
+<td><code>GGML_OPENVINO_DISABLE_KV_SLICE=1</code> (since replaced by <code>GGML_OPENVINO_KV_SLICE</code>, which no longer affects Bonsai decode)</td>
 <td>+1.6%</td>
 </tr>
 <tr>
