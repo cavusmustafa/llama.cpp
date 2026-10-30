@@ -18,7 +18,7 @@ Last updated 2026-10-17: sections 8 and 9 are new or rewritten.
 | **Model** | Bonsai 2 27B, a ternary (-1 / 0 / +1) quantization of a 27 B hybrid-attention LLM. 6.70 GiB at 2.13 bits per weight, vs ~54 GB at fp16. |
 | **Goal** | Run it through llama.cpp's OpenVINO backend on an Intel GPU, using the new 2-bit OpenCL kernels from OpenVINO PR #38460, and compare against Vulkan and against native OpenVINO. |
 | **Work needed** | 161 lines across 7 files to make it run, then four more changes to close part of the decode gap. |
-| **Outcome** | Correct output, **3.16x faster prefill than Vulkan** (535 vs 169 t/s), and decode improved 12.24 -> 13.46 t/s, which is **1.12x off** the native-OpenVINO ceiling. |
+| **Outcome** | Correct output, **3.21x faster prefill than Vulkan** (544 vs 169 t/s), and decode improved 12.24 -> 13.46 t/s. On the latest PR build, real **OpenVINO GenAI** is 1.10x ahead on decode and 1.21x on prefill. |
 | **Biggest surprise** | Without the PR's 2-bit kernels, the same model runs **167x slower**. The kernels are not an optimization, they are the difference between usable and unusable. |
 | **Correction** | This page previously said decode was a tie limited by an ~80 GB/s bandwidth wall. Both halves were wrong - the peak is 153.6 GB/s and the limit was integration overhead. See section 9. |
 
@@ -294,9 +294,16 @@ Both read the *same* packed weights, but move the work around differently:
 | | weights | activations |
 |---|---|---|
 | **int2 x f16 up-convert** (default) | dequantized to fp16 in registers, then fp16 matrix instructions | stay in native fp16 - no extra error |
-| **int2 x int8** (`OV_TERNOCL_INT2_INT8_PREFILL=1`, prefill only) | never unpacked - raw 2-bit codes feed a native int8 x int2 matrix instruction | quantized to int8 per (row, 128-group) - faster, slightly lossy |
+| **int2 x int8** (`OV_GPU_TERNOCL_INT2_INT8_PREFILL=1`, prefill only) | never unpacked - raw 2-bit codes feed a native int8 x int2 matrix instruction | quantized to int8 per (row, 128-group) - faster, slightly lossy |
 
-### What `OV_TERNOCL_INT2_INT8_PREFILL=1` actually does
+### What `OV_GPU_TERNOCL_INT2_INT8_PREFILL=1` actually does
+
+> **The name depends on the OpenVINO build.** Current PR #38460 heads expose it as the plugin
+> property `GPU_TERNOCL_INT2_INT8_PREFILL`, set from the environment as
+> **`OV_GPU_TERNOCL_INT2_INT8_PREFILL=1`**. Builds up to `5c6d4692ee` read a plain environment
+> variable, `OV_TERNOCL_INT2_INT8_PREFILL=1`, instead. Each build **silently ignores the other
+> name**: with the old spelling on a current build, pp128 stays at the default 237 t/s with no
+> warning. If the int8 numbers do not move, check the spelling first.
 
 It is **off by default**, and it changes only how the *prompt* is processed - the weights on disk
 are untouched and decode is unaffected.
@@ -317,12 +324,12 @@ step (see the dispatch snippet above). That is why every int8 row in the results
 number and the decode column is blank.
 
 **The trade is accuracy for prompt speed.** Quantizing activations to int8 is lossy in a way the
-default path is not. On this model it was harmless - default and `INT8_PREFILL=1` were
+default path is not. On this model it was harmless - default and int8 prefill were
 byte-identical over 90 greedy tokens here, and the PR author reports GSM8K within the standard
 error of the default. It is still the reason the switch is opt-in rather than the default: that is
 the PR author's call to make, and it needs a real accuracy harness rather than a 90-token diff.
 
-Measured here: **pp128 236 -> 549 t/s (2.3x)** and **pp512 535 -> 580 t/s (1.08x)**. The gain is
+Measured here: **pp128 236 -> 546 t/s (2.3x)** and **pp512 544 -> 575 t/s (1.06x)**. The gain is
 much larger at short prompts because at pp512 the default path is already close to saturating the
 machine, so there is less headroom left to recover.
 
@@ -332,18 +339,42 @@ machine, so there is less headroom left to recover.
 
 ![results](diagrams_bonsai2/11-results-2026-10-17.svg)
 
-Intel Arc B390 iGPU, same GPU and same model file for every row. Decode measured with `-n` alone
-and prefill with `-p` - see the measurement note below, which is not a formality.
+Intel Arc B390 iGPU, same GPU and same model file for every row, all on the **latest PR #38460
+head** (`4185ce2f15`). Decode measured with `-n` alone and prefill with `-p` - see the measurement
+note below, which is not a formality.
 
 | | pp128 | pp512 | tg32 | tg128 |
 |---|---:|---:|---:|---:|
-| **native OpenVINO** (`paged_bench_llm_27b`) | 241.2 | **638.5** | **14.90** | **15.03** |
-| **native OpenVINO**, `INT8_PREFILL=1` | **616.3** | **693.4** | - | - |
-| **ggml-openvino** + ternary kernels | 236.1 | 535.1 | 13.45 | 13.46 |
-| **ggml-openvino**, `INT8_PREFILL=1` | 549.0 | 579.7 | - | - |
-| ggml-openvino, before the 2026-10-17 work | 232.2 | 527.3 | 12.27 | 12.24 |
+| **OpenVINO GenAI** (`VLMPipeline`, `llm_bench`) | 256.2 | **657.9** | **14.63** | **14.53** |
+| **OpenVINO GenAI**, int8 prefill | **638.2** | **715.1** | - | - |
+| **ggml-openvino** + ternary kernels | 236.5 | 544.2 | 13.21 | 13.21 |
+| **ggml-openvino**, int8 prefill | 545.8 | 575.1 | - | - |
 | **ggml-vulkan** | 171.2 | 169.5 | 12.70 | 12.70 |
 | ggml-openvino, ternary kernels off | 1.4 | - | 1.24 | - |
+
+"int8 prefill" is `OV_GPU_TERNOCL_INT2_INT8_PREFILL=1` (section 7). GenAI prefill t/s is prompt
+tokens / first-token latency at an exact 128- or 512-token prompt; GenAI decode is llm_bench's
+2nd-token throughput.
+
+GenAI / ggml-openvino: pp128 **1.08x**, pp512 **1.21x**, decode **1.10-1.11x** (int8 prefill on
+both: 1.17x / 1.24x). ggml-openvino / Vulkan: pp512 **3.21x** (3.39x with int8 prefill), decode
+**1.04x**.
+
+<details markdown="1"><summary>The same comparison on the earlier PR build (<code>5c6d4692ee</code>)</summary>
+
+The earlier PR revision did not ship a GenAI path; its native-OpenVINO reference was the PR's own
+`paged_bench_llm_27b` PagedAttention tool, since removed from the PR. That build decodes about 2%
+faster under ggml-openvino (13.47 vs 13.21 t/s, measured back to back).
+
+| | pp128 | pp512 | tg32 | tg128 |
+|---|---:|---:|---:|---:|
+| native OpenVINO (`paged_bench_llm_27b`) | 241.2 | 638.5 | 14.90 | 15.03 |
+| native OpenVINO, int8 prefill | 616.3 | 693.4 | - | - |
+| ggml-openvino + ternary kernels | 236.1 | 535.1 | 13.45 | 13.46 |
+| ggml-openvino, int8 prefill | 549.0 | 579.7 | - | - |
+| ggml-openvino, before the 2026-10-17 work | 232.2 | 527.3 | 12.27 | 12.24 |
+
+</details>
 
 **Prefill: OpenVINO wins by 3.16x** at a 512-token prompt (3.42x with int8 prefill). The shape of
 the curve is as informative as the ratio - Vulkan is flat from 128 to 512 tokens (171 -> 169 t/s),
@@ -479,12 +510,10 @@ Useful switches while poking at it:
 
 | variable | effect |
 |---|---|
-| `OV_TERNOCL_INT2_DEBUG=1` | prints accept/reject plus the reason, per matmul |
-| `OV_TERNOCL_INT2_CFG_DEBUG=1` | prints the chosen tile and kernel per shape |
-| `OV_TERNOCL_HADAMARD_DEBUG=1` | traces the rotation fold |
-| `OV_TERNOCL_INT2_INT8_PREFILL=1` | the faster, slightly lossy prefill kernel |
-| `OV_TERNOCL_INT2_FUSE_HADAMARD=0` | leave the rotation in the graph instead of folding it |
-| `OV_TERNOCL_INT2_DISABLE=1` | turn the whole PR off |
+| `OV_GPU_TERNOCL_INT2_INT8_PREFILL=1` | the faster, slightly lossy prefill kernel (old builds: `OV_TERNOCL_INT2_INT8_PREFILL=1`) |
+| `OV_GPU_ENABLE_TERNOCL_INT2=0` | turn the TernOCL kernels off (old builds: `OV_TERNOCL_INT2_DISABLE=1`) |
+| `OV_GPU_ENABLE_HADAMARD_FC_FUSION=0` | leave the rotation in the graph instead of folding it - debug-caps builds only (old builds: `OV_TERNOCL_INT2_FUSE_HADAMARD=0`) |
+| `OV_TERNOCL_INT2_DEBUG=1`, `_CFG_DEBUG=1`, `OV_TERNOCL_HADAMARD_DEBUG=1` | accept/reject, tile choice and rotation tracing - **old builds only**; current heads route this through debug-caps logging |
 | `GGML_OPENVINO_DUMP_CGRAPH=1` | dump the ggml graph to `cgraph_ov.txt` |
 
 **One benchmarking trap worth repeating:** the OpenVINO backend compiles a graph per token count,

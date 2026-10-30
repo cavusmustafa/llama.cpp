@@ -54,50 +54,47 @@ def bar_group(y, label, rows, xmax, x_axis=215, width=720, bar_h=19, gap=5, unit
 
 # ---------------------------------------------------------------- 11: results
 def results():
-    w, h = 1000, 780
-    s = head(w, h, "Measured results - Bonsai 2 27B PQ2_0 (2026-10-17)",
-             "Intel Arc B390 iGPU (Xe3), identical GPU and model file. Decode measured with -n alone, prefill with -p. Higher is better.")
-    s += legend([(VIOLET, "native OpenVINO (ceiling)"), (BLUE, "ggml-openvino (this work)"),
+    w, h = 1000, 700
+    s = head(w, h, "Measured results - Bonsai 2 27B PQ2_0, latest PR #38460 head",
+             "Intel Arc B390 iGPU (Xe3), one OpenVINO build (4185ce2f15) for every bar. Decode measured with -n alone. Higher is better.")
+    s += legend([(VIOLET, "OpenVINO GenAI (VLMPipeline)"), (BLUE, "ggml-openvino (this work)"),
                  (ORANGE, "ggml-vulkan"), (GREEN, "int8 prefill variant")], 72, gap=232)
 
     g, yy = bar_group(124, "Prefill, 512-token prompt  (t/s)", [
-        (693.4, GREEN,  "native OV int8"),
-        (638.5, VIOLET, "native OV"),
-        (579.7, GREEN,  "ggml-ov int8"),
-        (535.1, BLUE,   "ggml-openvino"),
-        (527.3, GHOST,  "ggml-ov before"),
+        (715.1, GREEN,  "GenAI int8"),
+        (657.9, VIOLET, "GenAI"),
+        (575.1, GREEN,  "ggml-ov int8"),
+        (544.2, BLUE,   "ggml-openvino"),
         (169.5, ORANGE, "vulkan"),
-    ], xmax=720)
+    ], xmax=740)
     s += g
 
     g, yy = bar_group(yy + 34, "Prefill, 128-token prompt  (t/s)", [
-        (616.3, GREEN,  "native OV int8"),
-        (549.0, GREEN,  "ggml-ov int8"),
-        (241.2, VIOLET, "native OV"),
-        (236.1, BLUE,   "ggml-openvino"),
-        (232.2, GHOST,  "ggml-ov before"),
+        (638.2, GREEN,  "GenAI int8"),
+        (545.8, GREEN,  "ggml-ov int8"),
+        (256.2, VIOLET, "GenAI"),
+        (236.5, BLUE,   "ggml-openvino"),
         (171.2, ORANGE, "vulkan"),
-    ], xmax=720)
+    ], xmax=740)
     s += g
 
     g, yy = bar_group(yy + 34, "Decode, 128 tokens  (t/s)", [
-        (15.03, VIOLET, "native OV"),
-        (13.46, BLUE,   "ggml-openvino"),
+        (14.53, VIOLET, "GenAI"),
+        (13.21, BLUE,   "ggml-openvino"),
         (12.70, ORANGE, "vulkan"),
-        (12.24, GHOST,  "ggml-ov before"),
     ], xmax=16)
     s += g
 
     yy += 26
     s.append(f'<rect x="24" y="{yy}" width="952" height="96" rx="6" fill="{PANEL}"/>')
-    s.append(f'<text x="40" y="{yy + 25}" font-size="13" font-weight="600" fill="{INK}">This session</text>')
+    s.append(f'<text x="40" y="{yy + 25}" font-size="13" font-weight="600" fill="{INK}">Reading it</text>')
     for i, line in enumerate([
-        "Decode 12.24 -> 13.46 t/s (+10.0%), and the gap to the native-OpenVINO ceiling closed from 1.22x to 1.12x.",
-        "Prefill is unchanged by this work; ggml-openvino is 3.16x ggml-vulkan at pp512 (3.42x with int8 prefill).",
+        "GenAI leads ggml-openvino by 1.10x on decode and 1.21x on pp512; ggml-openvino leads Vulkan by 3.21x on pp512.",
+        "int8 prefill = OV_GPU_TERNOCL_INT2_INT8_PREFILL=1 (prefill only, 2.3x at pp128). The old OV_TERNOCL_... name is ignored here.",
     ]):
         s.append(f'<text x="40" y="{yy + 48 + i * 20}" font-size="12.5" fill="{INK}">{line}</text>')
     s.append(f'<text x="40" y="{yy + 88}" font-size="11.5" fill="{MUTED}">'
-             f'The native-OpenVINO rows are paged_bench_llm_27b, the PR\'s PagedAttention tool - not openvino_genai.LLMPipeline, which was never run.</text>')
+             f'GenAI prefill = prompt tokens / first-token latency (llm_bench); decode = 2nd-token throughput.</text>')
     s.append("</svg>")
     return "\n".join(s)
 

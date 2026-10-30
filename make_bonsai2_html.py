@@ -34,7 +34,7 @@ doc_title = title_match.group(1).strip() if title_match else "Bonsai 2 on OpenVI
 intro_md = re.sub(r"^# .+$", "", intro_md, count=1, flags=re.MULTILINE).strip()
 intro_md = intro_md.rstrip("-\n ").strip()
 
-MD_EXT = ["tables", "fenced_code", "sane_lists"]
+MD_EXT = ["tables", "fenced_code", "sane_lists", "md_in_html"]
 
 
 def render(md_text):
@@ -113,6 +113,8 @@ table{border-collapse:collapse;width:100%;margin:18px 0;font-size:14.5px;display
 th,td{border:1px solid var(--rule);padding:8px 11px;text-align:left;vertical-align:top}
 th{background:var(--panel);font-weight:600}
 tbody tr:nth-child(even){background:color-mix(in srgb,var(--panel) 55%,transparent)}
+details{margin:18px 0;padding:10px 14px;border:1px solid var(--rule);border-radius:8px;background:var(--panel)}
+summary{cursor:pointer;font-weight:600}
 .fig{margin:22px 0;padding:0;background:#fff;border:1px solid var(--rule);
   border-radius:8px;overflow:hidden}
 svg.diagram{display:block;width:100%;height:auto}

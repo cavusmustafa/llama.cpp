@@ -72,7 +72,7 @@ BF16 rather than ternary; they correctly fall through to the stock path. Every u
 
 - OV GPU output is **identical to the ggml-CPU ground truth** on a short greedy prompt
   (`"The capital of France is"` -> same reasoning trace, `Paris`).
-- OV GPU default and `OV_TERNOCL_INT2_INT8_PREFILL=1` are **byte-identical** over 90 greedy tokens.
+- OV GPU default and int8 prefill (`OV_GPU_TERNOCL_INT2_INT8_PREFILL=1`; `OV_TERNOCL_INT2_INT8_PREFILL=1` on builds up to `5c6d4692ee`) are **byte-identical** over 90 greedy tokens.
 - Vulkan agrees semantically but diverges in wording after ~35 greedy tokens. This is ordinary
   near-tie drift between different kernels, not a correctness failure.
 - `test-backend-ops -b OPENVINO0`: **8079/8084**. All 5 failures are `GATED_DELTA_NET`
@@ -83,58 +83,68 @@ BF16 rather than ternary; they correctly fall through to the stock path. Every u
 
 ## 4. Performance
 
-`llama-bench -r 3 -ngl 99`, same GPU, same model file. t/s.
-
-All decode numbers measured with `-n <N> -r 5` **on their own** and all prefill with
-`-p 128,512 -r 3`; see the measurement note at the end of this section for why that matters.
+Same GPU, same model file, t/s. Every row below is on the **latest PR #38460 head**
+(`4185ce2f15`, 2026-10-20) with GenAI `6a35b97b` built in as an extra module. ggml-openvino runs
+`GGML_OPENVINO_ENABLE_KV_4D=1 GGML_OPENVINO_DISABLE_KV_SLICE=1`. Decode is measured with
+`-n <N> -r 5` **on its own** and prefill with `-p 128,512 -r 3`; the measurement note at the end of
+this section explains why that matters.
 
 | configuration | pp128 | pp512 | tg32 | tg128 |
 |---|---:|---:|---:|---:|
-| **native OpenVINO** (`paged_bench_llm_27b`) | 241.2 | **638.5** | **14.90** | **15.03** |
-| **native OpenVINO**, `INT8_PREFILL=1` | **616.3** | **693.4** | - | - |
-| **ggml-openvino**, final (this work) | 236.1 | 535.1 | 13.45 | 13.46 |
-| **ggml-openvino**, final + `INT8_PREFILL=1` | 549.0 | 579.7 | - | - |
-| ggml-openvino before this work | 232.2 | 527.3 | 12.27 | 12.24 |
+| **OpenVINO GenAI** (`VLMPipeline`, `llm_bench`) | 256.2 | **657.9** | **14.63** | **14.53** |
+| **OpenVINO GenAI**, int8 prefill | **638.2** | **715.1** | - | - |
+| **ggml-openvino** (this work) | 236.5 | 544.2 | 13.21 | 13.21 |
+| **ggml-openvino**, int8 prefill | 545.8 | 575.1 | - | - |
 | **ggml-vulkan** | 171.2 | 169.5 | 12.70 | 12.70 |
-| ggml-openvino, `TERNOCL_DISABLE=1` | 1.4 | - | 1.24 | - |
+| ggml-openvino, TernOCL disabled | 1.4 | - | 1.24 | - |
 
-Native OpenVINO ÷ ggml-openvino: pp128 **1.02x**, pp512 **1.19x**, tg **1.11-1.12x** (with int8
-prefill on both sides: 1.12x / 1.20x). ggml-openvino ÷ vulkan: pp512 **3.16x** (3.42x with int8
-prefill), tg **1.06x**.
+"int8 prefill" means **`OV_GPU_TERNOCL_INT2_INT8_PREFILL=1`**. Current PR heads read only that
+name; the old `OV_TERNOCL_INT2_INT8_PREFILL=1` is **silently ignored** there (pp128 stays at the
+default 236.75 on this build, verified). Builds up to `5c6d4692ee` read only the old name.
 
-The "native OpenVINO" rows are `paged_bench_llm_27b`, the PR's own PagedAttention tool - the
-honest native ceiling for this model. They are **not** `openvino_genai.LLMPipeline`, which was
-never run here.
+GenAI / ggml-openvino: pp128 **1.08x**, pp512 **1.21x**, decode **1.10-1.11x** (int8 prefill on
+both: 1.17x / 1.24x). ggml-openvino / Vulkan: pp512 **3.21x** (3.39x with int8 prefill), decode
+**1.04x**.
 
-Two results only:
+The GenAI rows are real `openvino_genai.VLMPipeline`, run with the PR doc's `llm_bench` recipe on
+the u2 IR plus the Qwen3.5 tokenizer, config and vision encoders from the template export (Bonsai 2
+is a Qwen3.5 VLM to GenAI; text prompts never run the vision encoders). Prefill t/s is prompt tokens
+/ first-token latency at an exact 128- or 512-token prompt (`genai_prompts/p{128,512}.jsonl`,
+verified by llm_bench's reported input size); decode is llm_bench's 2nd-token throughput over 32
+and 128 new tokens. The generated text matches the reference opening ("The user wants a concise
+explanation of photosynthesis..."). Reproduce with `bench_genai.sh` (paths point at `../ov-bonsai2/`).
+
+The newer PR head costs ggml-openvino about **2% of decode** against the earlier build
+(13.21 vs 13.47 t/s, measured back to back in one session); prefill is flat to slightly up.
+
+#### The same comparison on the earlier PR build (`5c6d4692ee`)
+
+That revision shipped no GenAI path. Its native reference was `paged_bench_llm_27b`, the PR's own
+PagedAttention tool, which has since been removed from the PR.
+
 | configuration | pp128 | pp512 | tg32 | tg128 |
 |---|---:|---:|---:|---:|
-| **ggml-openvino** + TernOCL | 233.9 | 527.4 | 12.25 | 11.28 |
-| **ggml-vulkan** | 161.0 | 165.4 | **12.32** | **12.31** |
+| native OpenVINO (`paged_bench_llm_27b`) | 241.2 | 638.5 | 14.90 | 15.03 |
+| native OpenVINO, int8 prefill (`OV_TERNOCL_INT2_INT8_PREFILL=1`) | 616.3 | 693.4 | - | - |
+| ggml-openvino, final | 236.1 | 535.1 | 13.45 | 13.46 |
+| ggml-openvino, int8 prefill (`OV_TERNOCL_INT2_INT8_PREFILL=1`) | 549.0 | 579.7 | - | - |
+| ggml-openvino before this work | 232.2 | 527.3 | 12.27 | 12.24 |
 
-The native-OpenVINO row is the PR's own tool (`paged_bench_llm_27b`, PagedAttention) on the u2 IR
-built per `ternocl_int2_bonsai2_from_scratch.md`, same GPU and same weights. It is the ceiling the
-ggml-openvino integration is measured against. Its 21-token-prompt reference run reproduces the
-doc's published `generated_ids` exactly, which is also the end-to-end check that the GGUF -> IR
-weight mapping is correct.
-
-Caveat on comparability: `paged_bench_llm_27b` reports TTFT for one prompt, so prefill t/s here is
-`prompt_tokens / TTFT` at a synthetic prompt of that length, not llama-bench's `pp` loop. Decode is
-a genuine N-token greedy generation and is flat (14.9 / 15.03 / 15.0 at tg32 / tg128 / tg256).
+Its 21-token reference run reproduces the doc's published `generated_ids` exactly, which is the
+end-to-end check that the GGUF -> IR weight mapping is correct.
 
 ### Prefill
 
-ggml-openvino is **3.2x ggml-vulkan at pp512** (527 vs 165), and **3.5x** with the optional int8
-prefill kernel (571). Vulkan is essentially flat from pp128 to pp512 (161 -> 165) while OV scales
-(234 -> 527), which is what a tiled DPAS GEMM should do against a per-token kernel.
+ggml-openvino is **3.21x ggml-vulkan at pp512** (544 vs 169), and **3.39x** with int8 prefill
+(575). Vulkan is flat from pp128 to pp512 (171 -> 169) while OV scales (236 -> 544), which is what a
+tiled DPAS GEMM should do against a per-token kernel.
 
-`OV_TERNOCL_INT2_INT8_PREFILL=1` is off by default in the PR but is a large win here, 2.3x at
-pp128, and was bit-identical on this model.
+Int8 prefill is off by default in the PR but is a large win at short prompts: **2.3x at pp128**
+(236 -> 546), 1.06x at pp512. Greedy output was byte-identical to the default over 90 tokens.
 
-Against the native-OpenVINO ceiling, ggml-openvino prefill is already close: 1.03x at pp128 (234 vs
-241) and 1.21x at pp512 (527 vs 638). With `INT8_PREFILL=1` the ratio is 1.16x / 1.21x (530/571 vs
-616/693). So unlike the dense and MoE models previously measured, there is no large prefill
-integration gap to recover on this architecture - the remaining headroom is mostly in decode.
+Against GenAI, ggml-openvino prefill is close: 1.08x at pp128 and 1.21x at pp512 (1.17x / 1.24x with
+int8 prefill on both). Unlike the dense and MoE models measured before, there is no large prefill
+integration gap on this architecture; the remaining headroom is mostly in decode.
 
 ### Decode
 
@@ -348,7 +358,7 @@ Confirming that needs an `ENABLE_DEBUG_CAPS=ON` OpenVINO rebuild (this build has
 
 ### The PR is required, not an optimization
 
-With `OV_TERNOCL_INT2_DISABLE=1` the u2 weights fall back to OpenVINO's generic decompression
+With TernOCL disabled (`OV_GPU_ENABLE_TERNOCL_INT2=0`; `OV_TERNOCL_INT2_DISABLE=1` on builds up to `5c6d4692ee`) the u2 weights fall back to OpenVINO's generic decompression
 subgraph and the model runs at **1.4 t/s prefill and 1.24 t/s decode** - 167x and 9.9x slower. So
 for ternary GGUFs on the OV backend, PR #38460 is the difference between usable and unusable.
 
@@ -388,11 +398,13 @@ Three traps that silently produce wrong numbers:
 ## 6. Open items
 
 - Tile tables are Xe2-tuned; this GPU is Xe3, so prefill numbers are a floor, not a ceiling.
-- **The 1.22-1.33x decode gap to native OpenVINO is now the main open perf item** on this model, and
-  it is integration overhead, not kernel or bandwidth limited (see §4 Decode). It also grows with
-  context depth. Not yet decomposed into its causes.
-- `OV_TERNOCL_INT2_INT8_PREFILL` looks like it should be the default for this model, but that is the
-  PR author's call and needs a GSM8K-style accuracy check, not a 90-token diff.
+- **Decode gap to GenAI, 1.10x.** Root-caused in §4.1 (non-GEMV graph overhead; the GPU is
+  saturated on both paths). The largest remaining item is the f32 recurrent-state boundary
+  (§4.3), which needs a device-resident state rather than a local change.
+- **The newer PR head costs ~2% of ggml-openvino decode** (13.47 -> 13.21). Not bisected.
+- Int8 prefill looks like it should be the default for this model, but that is the PR author's
+  call and needs a GSM8K/WWB-style accuracy check, not a 90-token diff.
+- ggml-openvino has no PTQ1_0 support (Bonsai 1).
 - The 5 pre-existing `GATED_DELTA_NET` op failures on `dev_backend_openvino` are unrelated to this
   work but affect `raw_gates` / `rows_mode` paths this arch family can use.
-- Nothing here has been pushed or proposed upstream.
+- Pushed to `cavusmustafa/llama.cpp` branch `prism_ov_ternary_kv4d`; no PR is open.
