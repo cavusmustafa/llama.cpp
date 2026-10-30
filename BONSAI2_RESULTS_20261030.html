@@ -1,0 +1,804 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bonsai 2 27B on Intel GPU — results update, 2026-10-30</title>
+<style>
+:root{
+  --ink:#1b1f24; --muted:#6b7480; --rule:#dfe4ea; --surface:#ffffff; --panel:#f7f9fb;
+  --accent:#2f6fb3; --code-bg:#f4f6f9; --warn-bg:#fdf6e7; --warn-bd:#c77c1e;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ink:#e6e9ee; --muted:#9aa4b2; --rule:#2b3240; --surface:#14171c; --panel:#1b1f27;
+    --accent:#6ea8e8; --code-bg:#1d2229; --warn-bg:#2a2317; --warn-bd:#c77c1e;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--surface);color:var(--ink);
+  font:16px/1.65 "Segoe UI",Helvetica,Arial,sans-serif;-webkit-text-size-adjust:100%}
+.wrap{max-width:1060px;margin:0 auto;padding:32px 24px 80px}
+h1{font-size:28px;line-height:1.25;margin:0 0 10px}
+h2{font-size:22px;margin:0 0 18px;padding-bottom:10px;border-bottom:1px solid var(--rule)}
+h3{font-size:17px;margin:30px 0 10px}
+p,li{color:var(--ink)}
+.standfirst{color:var(--muted);font-size:15px;margin:0 0 20px}
+.standfirst p{color:var(--muted);margin:.5em 0}
+a{color:var(--accent)}
+hr{border:0;border-top:1px solid var(--rule);margin:28px 0}
+code{font:13.5px/1.5 ui-monospace,Consolas,monospace;background:var(--code-bg);
+  padding:.12em .36em;border-radius:4px}
+pre{background:var(--code-bg);border:1px solid var(--rule);border-radius:8px;
+  padding:14px 16px;overflow:auto}
+pre code{background:none;padding:0}
+blockquote{margin:20px 0;padding:12px 18px;background:var(--warn-bg);
+  border-left:4px solid var(--warn-bd);border-radius:0 6px 6px 0}
+blockquote p{margin:.4em 0}
+table{border-collapse:collapse;width:100%;margin:18px 0;font-size:14.5px;display:block;overflow-x:auto}
+th,td{border:1px solid var(--rule);padding:8px 11px;text-align:left;vertical-align:top}
+th{background:var(--panel);font-weight:600}
+tbody tr:nth-child(even){background:color-mix(in srgb,var(--panel) 55%,transparent)}
+details{margin:18px 0;padding:10px 14px;border:1px solid var(--rule);border-radius:8px;background:var(--panel)}
+summary{cursor:pointer;font-weight:600}
+.fig{margin:22px 0;padding:0;background:#fff;border:1px solid var(--rule);
+  border-radius:8px;overflow:hidden}
+svg.diagram{display:block;width:100%;height:auto}
+.tabs{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;gap:6px;
+  padding:10px 0;margin:0 0 24px;background:var(--surface);border-bottom:1px solid var(--rule)}
+.tab{font:600 13px/1 "Segoe UI",Helvetica,Arial,sans-serif;color:var(--muted);
+  background:transparent;border:1px solid transparent;border-radius:999px;
+  padding:8px 13px;cursor:pointer}
+.tab:hover{color:var(--ink);background:var(--panel)}
+.tab[aria-selected="true"]{color:#fff;background:var(--accent);border-color:var(--accent)}
+.tab:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.panel{display:none;animation:fade .18s ease-out}
+.panel.is-active{display:block}
+@keyframes fade{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+.foot{margin-top:40px;padding-top:16px;border-top:1px solid var(--rule);
+  color:var(--muted);font-size:13px}
+@media print{
+  .tabs{display:none} .panel{display:block!important;page-break-before:always}
+  .panel:first-of-type{page-break-before:auto} body{background:#fff;color:#000}
+}
+</style>
+<body>
+<div class="wrap">
+  <h1>Bonsai 2 27B on Intel GPU — results update, 2026-10-30</h1>
+  <div class="standfirst"><p>Latest measurements of <code>Ternary-Bonsai-2-27B-PQ2_0.gguf</code> on llama.cpp's OpenVINO backend, against
+real OpenVINO GenAI and llama.cpp's Vulkan backend, compared with every earlier milestone back to
+the original report of 2026-10-08.</p>
+<p>Companion documents: <code>BONSAI2_TERNARY_OV_REPORT.md</code> (engineering detail and root-cause analysis)
+and <code>BONSAI2_EXPLAINED.md</code> (background, no prior knowledge assumed).</p></div>
+  <div class="tabs" role="tablist" aria-label="Sections"><button class="tab" role="tab" id="btn-tab-0-summary" aria-controls="tab-0-summary" aria-selected="true" tabindex="0">Summary</button><button class="tab" role="tab" id="btn-tab-1-latest-results" aria-controls="tab-1-latest-results" aria-selected="false" tabindex="-1">Latest results</button><button class="tab" role="tab" id="btn-tab-2-compared-with-earlier-results" aria-controls="tab-2-compared-with-earlier-results" aria-selected="false" tabindex="-1">Compared with earlier results</button><button class="tab" role="tab" id="btn-tab-3-gaps-over-time" aria-controls="tab-3-gaps-over-time" aria-selected="false" tabindex="-1">Gaps over time</button><button class="tab" role="tab" id="btn-tab-4-why-the-remaining-gap-exists" aria-controls="tab-4-why-the-remaining-gap-exists" aria-selected="false" tabindex="-1">Why the remaining gap exists</button><button class="tab" role="tab" id="btn-tab-5-measurement-notes" aria-controls="tab-5-measurement-notes" aria-selected="false" tabindex="-1">Measurement notes</button><button class="tab" role="tab" id="btn-tab-6-reproducing" aria-controls="tab-6-reproducing" aria-selected="false" tabindex="-1">Reproducing</button><button class="tab" role="tab" id="btn-tab-7-next-steps" aria-controls="tab-7-next-steps" aria-selected="false" tabindex="-1">Next steps</button></div>
+  <section class="panel is-active" role="tabpanel" id="tab-0-summary" aria-labelledby="btn-tab-0-summary"><h2>Summary</h2><table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Stack</strong></td>
+<td>OpenVINO <strong>master</strong> <code>5d07300df3</code> (PR #38460 merged as <code>f4e23bfdf1</code>) + GenAI <code>49237dab</code>; llama.cpp branch <code>prism_ov_ternary_sync</code>, synced with <code>ravi9/dev_backend_openvino</code> @ <code>02d71ff9e</code></td>
+</tr>
+<tr>
+<td><strong>Decode</strong></td>
+<td>ggml-openvino <strong>13.28 t/s</strong>, GenAI <strong>14.57</strong> (1.10x ahead), Vulkan <strong>12.71</strong></td>
+</tr>
+<tr>
+<td><strong>Prefill, 512 tokens</strong></td>
+<td>ggml-openvino <strong>536 t/s</strong>, GenAI <strong>680</strong> (1.27x), Vulkan <strong>169</strong> (ggml-openvino 3.18x ahead)</td>
+</tr>
+<tr>
+<td><strong>Since the original report</strong></td>
+<td>ggml-openvino decode <strong>+8.5%</strong> on a like-for-like basis (12.24 -&gt; 13.28). Prefill +1.7% (pp512).</td>
+</tr>
+<tr>
+<td><strong>Vs the native ceiling</strong></td>
+<td>Decode gap <strong>1.12x -&gt; 1.10x</strong> since it was first measured on 10-17</td>
+</tr>
+<tr>
+<td><strong>Corrections</strong></td>
+<td>The original report's tg128 of 11.28 was a measurement artifact. The Vulkan gain since 10-08 comes from a Mesa driver upgrade, not code.</td>
+</tr>
+</tbody>
+</table>
+<p>Three things moved results in this period, and only one of them was code in this branch:</p>
+<ol>
+<li><strong>This branch's own work</strong> (10-17): +10.0% decode, measured as a same-session A/B.</li>
+<li><strong>Newer OpenVINO</strong> (PR head, then master): about −1.5% decode for ggml-openvino. GenAI prefill
+   improved.</li>
+<li><strong>Syncing with <code>dev_backend_openvino</code></strong>: neutral on this model (+0.4%).</li>
+</ol>
+<hr /></section><section class="panel" role="tabpanel" id="tab-1-latest-results" aria-labelledby="btn-tab-1-latest-results" hidden><h2>Latest results</h2><p>Arc B390 iGPU (Xe3), OpenVINO master <code>5d07300df3</code>, all rows measured 2026-10-30, t/s. Decode
+measured with <code>-n &lt;N&gt; -r 5</code> <strong>on its own</strong>; prefill with <code>-p 128,512 -r 3</code>.</p>
+<p><figure class="fig"><svg class="diagram" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="700" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">Measured results - Bonsai 2 27B PQ2_0, OpenVINO master (PR #38460 merged)</text>
+<text x="24" y="56" font-size="13" fill="#6b7480">Intel Arc B390 iGPU (Xe3), OpenVINO 5d07300df3 for every OV bar. Decode measured with -n alone. Higher is better.</text>
+<rect x="24" y="72" width="14" height="14" rx="2" fill="#6b4fa8"/>
+<text x="44" y="84" font-size="11.5" fill="#1b1f24">OpenVINO GenAI (VLMPipeline)</text>
+<rect x="256" y="72" width="14" height="14" rx="2" fill="#2f6fb3"/>
+<text x="276" y="84" font-size="11.5" fill="#1b1f24">ggml-openvino (this work)</text>
+<rect x="488" y="72" width="14" height="14" rx="2" fill="#c77c1e"/>
+<text x="508" y="84" font-size="11.5" fill="#1b1f24">ggml-vulkan</text>
+<rect x="720" y="72" width="14" height="14" rx="2" fill="#2d8a4e"/>
+<text x="740" y="84" font-size="11.5" fill="#1b1f24">int8 prefill variant</text>
+<text x="24" y="124" font-size="14" font-weight="600" fill="#1b1f24">Prefill, 512-token prompt  (t/s)</text>
+<line x1="215" y1="136" x2="215" y2="256" stroke="#8a93a0"/>
+<text x="205" y="150" font-size="11.5" text-anchor="end" fill="#1b1f24">GenAI int8</text>
+<rect x="216" y="136" width="701.4" height="19" rx="4" fill="#2d8a4e"/>
+<rect x="216" y="136" width="6.0" height="19" fill="#2d8a4e"/>
+<text x="925.4" y="150" font-size="11.5" font-weight="600" fill="#1b1f24">740.4</text>
+<text x="205" y="174" font-size="11.5" text-anchor="end" fill="#1b1f24">GenAI</text>
+<rect x="216" y="160" width="644.2" height="19" rx="4" fill="#6b4fa8"/>
+<rect x="216" y="160" width="6.0" height="19" fill="#6b4fa8"/>
+<text x="868.2" y="174" font-size="11.5" font-weight="600" fill="#1b1f24">680</text>
+<text x="205" y="198" font-size="11.5" text-anchor="end" fill="#1b1f24">ggml-ov int8</text>
+<rect x="216" y="184" width="540.9" height="19" rx="4" fill="#2d8a4e"/>
+<rect x="216" y="184" width="6.0" height="19" fill="#2d8a4e"/>
+<text x="764.9" y="198" font-size="11.5" font-weight="600" fill="#1b1f24">570.9</text>
+<text x="205" y="222" font-size="11.5" text-anchor="end" fill="#1b1f24">ggml-openvino</text>
+<rect x="216" y="208" width="507.9" height="19" rx="4" fill="#2f6fb3"/>
+<rect x="216" y="208" width="6.0" height="19" fill="#2f6fb3"/>
+<text x="731.9" y="222" font-size="11.5" font-weight="600" fill="#1b1f24">536.1</text>
+<text x="205" y="246" font-size="11.5" text-anchor="end" fill="#1b1f24">vulkan</text>
+<rect x="216" y="232" width="159.8" height="19" rx="4" fill="#c77c1e"/>
+<rect x="216" y="232" width="6.0" height="19" fill="#c77c1e"/>
+<text x="383.8" y="246" font-size="11.5" font-weight="600" fill="#1b1f24">168.7</text>
+<text x="24" y="290" font-size="14" font-weight="600" fill="#1b1f24">Prefill, 128-token prompt  (t/s)</text>
+<line x1="215" y1="302" x2="215" y2="422" stroke="#8a93a0"/>
+<text x="205" y="316" font-size="11.5" text-anchor="end" fill="#1b1f24">GenAI int8</text>
+<rect x="216" y="302" width="633.4" height="19" rx="4" fill="#2d8a4e"/>
+<rect x="216" y="302" width="6.0" height="19" fill="#2d8a4e"/>
+<text x="857.4" y="316" font-size="11.5" font-weight="600" fill="#1b1f24">668.6</text>
+<text x="205" y="340" font-size="11.5" text-anchor="end" fill="#1b1f24">ggml-ov int8</text>
+<rect x="216" y="326" width="518.0" height="19" rx="4" fill="#2d8a4e"/>
+<rect x="216" y="326" width="6.0" height="19" fill="#2d8a4e"/>
+<text x="742.0" y="340" font-size="11.5" font-weight="600" fill="#1b1f24">546.8</text>
+<text x="205" y="364" font-size="11.5" text-anchor="end" fill="#1b1f24">GenAI</text>
+<rect x="216" y="350" width="244.5" height="19" rx="4" fill="#6b4fa8"/>
+<rect x="216" y="350" width="6.0" height="19" fill="#6b4fa8"/>
+<text x="468.5" y="364" font-size="11.5" font-weight="600" fill="#1b1f24">258.1</text>
+<text x="205" y="388" font-size="11.5" text-anchor="end" fill="#1b1f24">ggml-openvino</text>
+<rect x="216" y="374" width="224.4" height="19" rx="4" fill="#2f6fb3"/>
+<rect x="216" y="374" width="6.0" height="19" fill="#2f6fb3"/>
+<text x="448.4" y="388" font-size="11.5" font-weight="600" fill="#1b1f24">236.9</text>
+<text x="205" y="412" font-size="11.5" text-anchor="end" fill="#1b1f24">vulkan</text>
+<rect x="216" y="398" width="163.3" height="19" rx="4" fill="#c77c1e"/>
+<rect x="216" y="398" width="6.0" height="19" fill="#c77c1e"/>
+<text x="387.3" y="412" font-size="11.5" font-weight="600" fill="#1b1f24">172.4</text>
+<text x="24" y="456" font-size="14" font-weight="600" fill="#1b1f24">Decode, 128 tokens  (t/s)</text>
+<line x1="215" y1="468" x2="215" y2="540" stroke="#8a93a0"/>
+<text x="205" y="482" font-size="11.5" text-anchor="end" fill="#1b1f24">GenAI</text>
+<rect x="216" y="468" width="655.6" height="19" rx="4" fill="#6b4fa8"/>
+<rect x="216" y="468" width="6.0" height="19" fill="#6b4fa8"/>
+<text x="879.6" y="482" font-size="11.5" font-weight="600" fill="#1b1f24">14.57</text>
+<text x="205" y="506" font-size="11.5" text-anchor="end" fill="#1b1f24">ggml-openvino</text>
+<rect x="216" y="492" width="597.6" height="19" rx="4" fill="#2f6fb3"/>
+<rect x="216" y="492" width="6.0" height="19" fill="#2f6fb3"/>
+<text x="821.6" y="506" font-size="11.5" font-weight="600" fill="#1b1f24">13.28</text>
+<text x="205" y="530" font-size="11.5" text-anchor="end" fill="#1b1f24">vulkan</text>
+<rect x="216" y="516" width="572.0" height="19" rx="4" fill="#c77c1e"/>
+<rect x="216" y="516" width="6.0" height="19" fill="#c77c1e"/>
+<text x="796.0" y="530" font-size="11.5" font-weight="600" fill="#1b1f24">12.71</text>
+<rect x="24" y="566" width="952" height="96" rx="6" fill="#f7f9fb"/>
+<text x="40" y="591" font-size="13" font-weight="600" fill="#1b1f24">Reading it</text>
+<text x="40" y="614" font-size="12.5" fill="#1b1f24">GenAI leads ggml-openvino by 1.10x on decode and 1.27x on pp512; ggml-openvino leads Vulkan by 3.18x on pp512.</text>
+<text x="40" y="634" font-size="12.5" fill="#1b1f24">int8 prefill = OV_GPU_TERNOCL_INT2_INT8_PREFILL=1 (prefill only, 2.3x at pp128). The old OV_TERNOCL_... name is ignored here.</text>
+<text x="40" y="654" font-size="11.5" fill="#6b7480">GenAI prefill = prompt tokens / first-token latency (llm_bench); decode = 2nd-token throughput.</text>
+</svg></figure></p>
+<table>
+<thead>
+<tr>
+<th>configuration</th>
+<th style="text-align: right;">pp128</th>
+<th style="text-align: right;">pp512</th>
+<th style="text-align: right;">tg32</th>
+<th style="text-align: right;">tg128</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>OpenVINO GenAI</strong> (<code>VLMPipeline</code>, <code>llm_bench</code>)</td>
+<td style="text-align: right;">258.1</td>
+<td style="text-align: right;"><strong>680.0</strong></td>
+<td style="text-align: right;"><strong>14.64</strong></td>
+<td style="text-align: right;"><strong>14.57</strong></td>
+</tr>
+<tr>
+<td><strong>OpenVINO GenAI</strong>, int8 prefill</td>
+<td style="text-align: right;"><strong>668.6</strong></td>
+<td style="text-align: right;"><strong>740.4</strong></td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">–</td>
+</tr>
+<tr>
+<td><strong>ggml-openvino</strong>, <code>ENABLE_KV_4D=1 KV_SLICE=0</code></td>
+<td style="text-align: right;">236.9</td>
+<td style="text-align: right;">536.1</td>
+<td style="text-align: right;">13.27</td>
+<td style="text-align: right;">13.28</td>
+</tr>
+<tr>
+<td>ggml-openvino, default settings</td>
+<td style="text-align: right;">236.2</td>
+<td style="text-align: right;">541.4</td>
+<td style="text-align: right;">13.14</td>
+<td style="text-align: right;">13.16</td>
+</tr>
+<tr>
+<td><strong>ggml-openvino</strong>, int8 prefill</td>
+<td style="text-align: right;">546.8</td>
+<td style="text-align: right;">570.9</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">–</td>
+</tr>
+<tr>
+<td>ggml-openvino before the sync (same OpenVINO)</td>
+<td style="text-align: right;">236.3</td>
+<td style="text-align: right;">544.7</td>
+<td style="text-align: right;">13.19</td>
+<td style="text-align: right;">13.23</td>
+</tr>
+<tr>
+<td><strong>ggml-vulkan</strong></td>
+<td style="text-align: right;">172.4</td>
+<td style="text-align: right;">168.7</td>
+<td style="text-align: right;">12.72</td>
+<td style="text-align: right;">12.71</td>
+</tr>
+<tr>
+<td>ggml-openvino, TernOCL disabled</td>
+<td style="text-align: right;">1.4</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">1.24</td>
+<td style="text-align: right;">–</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>int8 prefill</strong> = <code>OV_GPU_TERNOCL_INT2_INT8_PREFILL=1</code>: the int2 x int8 DPAS kernel for prompts
+  (M &gt; 8) only. Weights are never unpacked and activations are quantized to int8 per 128-group.
+  2.3x at pp128, 1.06x at pp512, no effect on decode.</li>
+<li><strong>GenAI</strong> prefill t/s = prompt tokens / first-token latency at an exact 128- or 512-token prompt;
+  decode is llm_bench's 2nd-token throughput. Output text checked coherent.</li>
+<li><strong>Default settings</strong> are within 1% of the tuned configuration since the sync.</li>
+</ul>
+<hr /></section><section class="panel" role="tabpanel" id="tab-2-compared-with-earlier-results" aria-labelledby="btn-tab-2-compared-with-earlier-results" hidden><h2>Compared with earlier results</h2><p><figure class="fig"><svg class="diagram" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 640" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="640" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24">How the numbers moved, 2026-10-08 to 2026-10-30</text>
+<text x="24" y="56" font-size="13" fill="#6b7480">Bonsai 2 27B PQ2_0 on Arc B390. Decode measured with -n alone everywhere (10-08 ggml-openvino decode = clean re-measure of that code).</text>
+<rect x="24" y="72" width="14" height="14" rx="2" fill="#6b4fa8"/>
+<text x="44" y="84" font-size="11.5" fill="#1b1f24">native OpenVINO reference</text>
+<rect x="274" y="72" width="14" height="14" rx="2" fill="#2f6fb3"/>
+<text x="294" y="84" font-size="11.5" fill="#1b1f24">ggml-openvino</text>
+<rect x="524" y="72" width="14" height="14" rx="2" fill="#c77c1e"/>
+<text x="544" y="84" font-size="11.5" fill="#1b1f24">ggml-vulkan</text>
+<text x="70" y="126" font-size="14" font-weight="600" fill="#1b1f24">Decode, 128 tokens  (t/s)</text>
+<line x1="70" y1="290.0" x2="950" y2="290.0" stroke="#e6e9ee"/>
+<text x="64" y="294.0" font-size="10.5" text-anchor="end" fill="#6b7480">0</text>
+<line x1="70" y1="252.5" x2="950" y2="252.5" stroke="#e6e9ee"/>
+<text x="64" y="256.5" font-size="10.5" text-anchor="end" fill="#6b7480">4</text>
+<line x1="70" y1="215.0" x2="950" y2="215.0" stroke="#e6e9ee"/>
+<text x="64" y="219.0" font-size="10.5" text-anchor="end" fill="#6b7480">8</text>
+<line x1="70" y1="177.5" x2="950" y2="177.5" stroke="#e6e9ee"/>
+<text x="64" y="181.5" font-size="10.5" text-anchor="end" fill="#6b7480">12</text>
+<line x1="70" y1="140.0" x2="950" y2="140.0" stroke="#e6e9ee"/>
+<text x="64" y="144.0" font-size="10.5" text-anchor="end" fill="#6b7480">16</text>
+<line x1="70" y1="290" x2="950" y2="290" stroke="#8a93a0"/>
+<text x="140.0" y="284" font-size="10" text-anchor="middle" fill="#6b7480">n/a</text>
+<rect x="161.0" y="175.2" width="38" height="114.8" rx="4" fill="#2f6fb3"/>
+<rect x="161.0" y="284.0" width="38" height="6" fill="#2f6fb3"/>
+<text x="180.0" y="170.2" font-size="10" font-weight="600" text-anchor="middle" fill="#1b1f24">12.24</text>
+<rect x="201.0" y="174.6" width="38" height="115.4" rx="4" fill="#c77c1e"/>
+<rect x="201.0" y="284.0" width="38" height="6" fill="#c77c1e"/>
+<text x="220.0" y="169.6" font-size="10" font-weight="600" text-anchor="middle" fill="#1b1f24">12.31</text>
+<text x="180.0" y="307" font-size="11.5" font-weight="600" text-anchor="middle" fill="#1b1f24">10-08 original report</text>
+<text x="180.0" y="322" font-size="10.5" text-anchor="middle" fill="#6b7480">PR 5c6d4692ee</text>
+<rect x="341.0" y="149.1" width="38" height="140.9" rx="4" fill="#6b4fa8"/>
+<rect x="341.0" y="284.0" width="38" height="6" fill="#6b4fa8"/>
+<text x="360.0" y="144.1" font-size="10" font-weight="600" text-anchor="middle" fill="#1b1f24">15.03</text>
+<rect x="381.0" y="163.8" width="38" height="126.2" rx="4" fill="#2f6fb3"/>
+<rect x="381.0" y="284.0" width="38" height="6" fill="#2f6fb3"/>
+<text x="400.0" y="158.8" font-size="10" font-weight="600" text-anchor="middle" fill="#1b1f24">13.46</text>
+<rect x="421.0" y="170.9" width="38" height="119.1" rx="4" fill="#c77c1e"/>
+<rect x="421.0" y="284.0" width="38" height="6" fill="#c77c1e"/>
+<text x="440.0" y="165.9" font-size="10" font-weight="600" text-anchor="middle" fill="#1b1f24">12.7</text>
+<text x="400.0" y="307" font-size="11.5" font-weight="600" text-anchor="middle" fill="#1b1f24">10-17 decode work</text>
+<text x="400.0" y="322" font-size="10.5" text-anchor="middle" fill="#6b7480">PR 5c6d4692ee</text>
+<rect x="561.0" y="153.8" width="38" height="136.2" rx="4" fill="#6b4fa8"/>
+<rect x="561.0" y="284.0" width="38" height="6" fill="#6b4fa8"/>
+<text x="580.0" y="148.8" font-size="10" font-weight="600" text-anchor="middle" fill="#1b1f24">14.53</text>
+<rect x="601.0" y="166.2" width="38" height="123.8" rx="4" fill="#2f6fb3"/>
+<rect x="601.0" y="284.0" width="38" height="6" fill="#2f6fb3"/>
+<text x="620.0" y="161.2" font-size="10" font-weight="600" text-anchor="middle" fill="#1b1f24">13.21</text>
+<text x="660.0" y="284" font-size="10" text-anchor="middle" fill="#6b7480">n/a</text>
+<text x="620.0" y="307" font-size="11.5" font-weight="600" text-anchor="middle" fill="#1b1f24">10-30 PR head</text>
+<text x="620.0" y="322" font-size="10.5" text-anchor="middle" fill="#6b7480">PR 4185ce2f15</text>
+<rect x="781.0" y="153.4" width="38" height="136.6" rx="4" fill="#6b4fa8"/>
+<rect x="781.0" y="284.0" width="38" height="6" fill="#6b4fa8"/>
+<text x="800.0" y="148.4" font-size="10" font-weight="600" text-anchor="middle" fill="#1b1f24">14.57</text>
+<rect x="821.0" y="165.5" width="38" height="124.5" rx="4" fill="#2f6fb3"/>
+<rect x="821.0" y="284.0" width="38" height="6" fill="#2f6fb3"/>
+<text x="840.0" y="160.5" font-size="10" font-weight="600" text-anchor="middle" fill="#1b1f24">13.28</text>
+<rect x="861.0" y="170.8" width="38" height="119.2" rx="4" fill="#c77c1e"/>
+<rect x="861.0" y="284.0" width="38" height="6" fill="#c77c1e"/>
+<text x="880.0" y="165.8" font-size="10" font-weight="600" text-anchor="middle" fill="#1b1f24">12.71</text>
+<text x="840.0" y="307" font-size="11.5" font-weight="600" text-anchor="middle" fill="#1b1f24">10-30 OV master + sync</text>
+<text x="840.0" y="322" font-size="10.5" text-anchor="middle" fill="#6b7480">OV 5d07300df3</text>
+<text x="70" y="366" font-size="14" font-weight="600" fill="#1b1f24">Prefill, 512-token prompt  (t/s)</text>
+<line x1="70" y1="530.0" x2="950" y2="530.0" stroke="#e6e9ee"/>
+<text x="64" y="534.0" font-size="10.5" text-anchor="end" fill="#6b7480">0</text>
+<line x1="70" y1="490.5" x2="950" y2="490.5" stroke="#e6e9ee"/>
+<text x="64" y="494.5" font-size="10.5" text-anchor="end" fill="#6b7480">200</text>
+<line x1="70" y1="451.1" x2="950" y2="451.1" stroke="#e6e9ee"/>
+<text x="64" y="455.1" font-size="10.5" text-anchor="end" fill="#6b7480">400</text>
+<line x1="70" y1="411.6" x2="950" y2="411.6" stroke="#e6e9ee"/>
+<text x="64" y="415.6" font-size="10.5" text-anchor="end" fill="#6b7480">600</text>
+<line x1="70" y1="530" x2="950" y2="530" stroke="#8a93a0"/>
+<text x="140.0" y="524" font-size="10" text-anchor="middle" fill="#6b7480">n/a</text>
+<rect x="161.0" y="425.9" width="38" height="104.1" rx="4" fill="#2f6fb3"/>
+<rect x="161.0" y="524.0" width="38" height="6" fill="#2f6fb3"/>
+<text x="180.0" y="420.9" font-size="10" font-weight="600" text-anchor="middle" fill="#1b1f24">527.3</text>
+<rect x="201.0" y="497.4" width="38" height="32.6" rx="4" fill="#c77c1e"/>
+<rect x="201.0" y="524.0" width="38" height="6" fill="#c77c1e"/>
+<text x="220.0" y="492.4" font-size="10" font-weight="600" text-anchor="middle" fill="#1b1f24">165.4</text>
+<text x="180.0" y="547" font-size="11.5" font-weight="600" text-anchor="middle" fill="#1b1f24">10-08 original report</text>
+<text x="180.0" y="562" font-size="10.5" text-anchor="middle" fill="#6b7480">PR 5c6d4692ee</text>
+<rect x="341.0" y="404.0" width="38" height="126.0" rx="4" fill="#6b4fa8"/>
+<rect x="341.0" y="524.0" width="38" height="6" fill="#6b4fa8"/>
+<text x="360.0" y="399.0" font-size="10" font-weight="600" text-anchor="middle" fill="#1b1f24">638.5</text>
+<rect x="381.0" y="424.4" width="38" height="105.6" rx="4" fill="#2f6fb3"/>
+<rect x="381.0" y="524.0" width="38" height="6" fill="#2f6fb3"/>
+<text x="400.0" y="419.4" font-size="10" font-weight="600" text-anchor="middle" fill="#1b1f24">535.1</text>
+<rect x="421.0" y="496.5" width="38" height="33.5" rx="4" fill="#c77c1e"/>
+<rect x="421.0" y="524.0" width="38" height="6" fill="#c77c1e"/>
+<text x="440.0" y="491.5" font-size="10" font-weight="600" text-anchor="middle" fill="#1b1f24">169.5</text>
+<text x="400.0" y="547" font-size="11.5" font-weight="600" text-anchor="middle" fill="#1b1f24">10-17 decode work</text>
+<text x="400.0" y="562" font-size="10.5" text-anchor="middle" fill="#6b7480">PR 5c6d4692ee</text>
+<rect x="561.0" y="400.2" width="38" height="129.8" rx="4" fill="#6b4fa8"/>
+<rect x="561.0" y="524.0" width="38" height="6" fill="#6b4fa8"/>
+<text x="580.0" y="395.2" font-size="10" font-weight="600" text-anchor="middle" fill="#1b1f24">657.9</text>
+<rect x="601.0" y="422.6" width="38" height="107.4" rx="4" fill="#2f6fb3"/>
+<rect x="601.0" y="524.0" width="38" height="6" fill="#2f6fb3"/>
+<text x="620.0" y="417.6" font-size="10" font-weight="600" text-anchor="middle" fill="#1b1f24">544.2</text>
+<text x="660.0" y="524" font-size="10" text-anchor="middle" fill="#6b7480">n/a</text>
+<text x="620.0" y="547" font-size="11.5" font-weight="600" text-anchor="middle" fill="#1b1f24">10-30 PR head</text>
+<text x="620.0" y="562" font-size="10.5" text-anchor="middle" fill="#6b7480">PR 4185ce2f15</text>
+<rect x="781.0" y="395.8" width="38" height="134.2" rx="4" fill="#6b4fa8"/>
+<rect x="781.0" y="524.0" width="38" height="6" fill="#6b4fa8"/>
+<text x="800.0" y="390.8" font-size="10" font-weight="600" text-anchor="middle" fill="#1b1f24">680</text>
+<rect x="821.0" y="424.2" width="38" height="105.8" rx="4" fill="#2f6fb3"/>
+<rect x="821.0" y="524.0" width="38" height="6" fill="#2f6fb3"/>
+<text x="840.0" y="419.2" font-size="10" font-weight="600" text-anchor="middle" fill="#1b1f24">536.1</text>
+<rect x="861.0" y="496.7" width="38" height="33.3" rx="4" fill="#c77c1e"/>
+<rect x="861.0" y="524.0" width="38" height="6" fill="#c77c1e"/>
+<text x="880.0" y="491.7" font-size="10" font-weight="600" text-anchor="middle" fill="#1b1f24">168.7</text>
+<text x="840.0" y="547" font-size="11.5" font-weight="600" text-anchor="middle" fill="#1b1f24">10-30 OV master + sync</text>
+<text x="840.0" y="562" font-size="10.5" text-anchor="middle" fill="#6b7480">OV 5d07300df3</text>
+<rect x="24" y="578" width="952" height="50" rx="6" fill="#f7f9fb"/>
+<text x="40" y="598" font-size="12" fill="#1b1f24">Native reference: paged_bench_llm_27b at 10-17, OpenVINO GenAI (VLMPipeline) at 10-30. Vulkan at 10-08 ran on Mesa 26.1.3,</text>
+<text x="40" y="616" font-size="12" fill="#1b1f24">later on 26.2.4 with the same binary - that driver upgrade, not code, is the Vulkan step. "n/a" = not measured at that milestone.</text>
+</svg></figure></p>
+<h3>The four milestones</h3>
+<table>
+<thead>
+<tr>
+<th>milestone</th>
+<th>date</th>
+<th>llama.cpp branch</th>
+<th>OpenVINO</th>
+<th>native reference</th>
+<th>Vulkan driver</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>M0</strong> original report</td>
+<td>10-08</td>
+<td><code>prism_ov_ternary</code></td>
+<td>PR #38460 @ <code>5c6d4692ee</code></td>
+<td>none</td>
+<td>Mesa 26.1.3</td>
+</tr>
+<tr>
+<td><strong>M1</strong> decode work</td>
+<td>10-17</td>
+<td><code>prism_ov_ternary_kv4d</code></td>
+<td>PR #38460 @ <code>5c6d4692ee</code></td>
+<td><code>paged_bench_llm_27b</code></td>
+<td>Mesa 26.2.4</td>
+</tr>
+<tr>
+<td><strong>M2</strong> PR head</td>
+<td>10-30</td>
+<td><code>prism_ov_ternary_kv4d</code></td>
+<td>PR #38460 @ <code>4185ce2f15</code></td>
+<td>GenAI <code>6a35b97b</code></td>
+<td>Mesa 26.2.4</td>
+</tr>
+<tr>
+<td><strong>M3</strong> master + sync</td>
+<td>10-30</td>
+<td><code>prism_ov_ternary_sync</code></td>
+<td>master @ <code>5d07300df3</code></td>
+<td>GenAI <code>49237dab</code></td>
+<td>Mesa 26.2.4</td>
+</tr>
+</tbody>
+</table>
+<h3>ggml-openvino</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th style="text-align: right;">pp128</th>
+<th style="text-align: right;">pp512</th>
+<th style="text-align: right;">tg32</th>
+<th style="text-align: right;">tg128</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>M0, as published</td>
+<td style="text-align: right;">233.9</td>
+<td style="text-align: right;">527.4</td>
+<td style="text-align: right;">12.25</td>
+<td style="text-align: right;"><del>11.28</del></td>
+</tr>
+<tr>
+<td>M0, same code re-measured cleanly</td>
+<td style="text-align: right;">232.2</td>
+<td style="text-align: right;">527.3</td>
+<td style="text-align: right;">12.27</td>
+<td style="text-align: right;">12.24</td>
+</tr>
+<tr>
+<td>M1</td>
+<td style="text-align: right;">236.1</td>
+<td style="text-align: right;">535.1</td>
+<td style="text-align: right;">13.45</td>
+<td style="text-align: right;">13.46</td>
+</tr>
+<tr>
+<td>M2</td>
+<td style="text-align: right;">236.5</td>
+<td style="text-align: right;">544.2</td>
+<td style="text-align: right;">13.21</td>
+<td style="text-align: right;">13.21</td>
+</tr>
+<tr>
+<td><strong>M3</strong></td>
+<td style="text-align: right;"><strong>236.9</strong></td>
+<td style="text-align: right;"><strong>536.1</strong></td>
+<td style="text-align: right;"><strong>13.27</strong></td>
+<td style="text-align: right;"><strong>13.28</strong></td>
+</tr>
+<tr>
+<td><strong>M3 vs M0 (clean)</strong></td>
+<td style="text-align: right;">+2.0%</td>
+<td style="text-align: right;">+1.7%</td>
+<td style="text-align: right;"><strong>+8.1%</strong></td>
+<td style="text-align: right;"><strong>+8.5%</strong></td>
+</tr>
+</tbody>
+</table>
+<p>The published tg128 of 11.28 was an artifact: llama-bench ran the prefill cells first and
+contaminated the next decode cell. Running the same M0 code with <code>-n</code> alone gives 12.24, flat with
+tg32 and not the "decode degrades with depth" pattern the original report implied. Against the
+published figure the gain would look like +17.7%; <strong>+8.5% is the honest number</strong>.</p>
+<h3>ggml-openvino with int8 prefill</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th style="text-align: right;">pp128</th>
+<th style="text-align: right;">pp512</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>M0, as published (<code>OV_TERNOCL_INT2_INT8_PREFILL=1</code>)</td>
+<td style="text-align: right;">530.2</td>
+<td style="text-align: right;">571.1</td>
+</tr>
+<tr>
+<td>M1 (<code>OV_TERNOCL_INT2_INT8_PREFILL=1</code>)</td>
+<td style="text-align: right;">549.0</td>
+<td style="text-align: right;">579.7</td>
+</tr>
+<tr>
+<td>M2 (<code>OV_GPU_TERNOCL_INT2_INT8_PREFILL=1</code>)</td>
+<td style="text-align: right;">545.8</td>
+<td style="text-align: right;">575.1</td>
+</tr>
+<tr>
+<td><strong>M3</strong> (<code>OV_GPU_TERNOCL_INT2_INT8_PREFILL=1</code>)</td>
+<td style="text-align: right;"><strong>546.8</strong></td>
+<td style="text-align: right;"><strong>570.9</strong></td>
+</tr>
+</tbody>
+</table>
+<p>The variable was renamed between M1 and M2 and <strong>each build silently ignores the other name</strong>. With
+the old name on a current build, pp128 reads the default 236 t/s with no warning.</p>
+<h3>Native OpenVINO reference</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th style="text-align: right;">pp128</th>
+<th style="text-align: right;">pp512</th>
+<th style="text-align: right;">tg32</th>
+<th style="text-align: right;">tg128</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>M1, <code>paged_bench_llm_27b</code></td>
+<td style="text-align: right;">241.2</td>
+<td style="text-align: right;">638.5</td>
+<td style="text-align: right;">14.90</td>
+<td style="text-align: right;">15.03</td>
+</tr>
+<tr>
+<td>M2, GenAI</td>
+<td style="text-align: right;">256.2</td>
+<td style="text-align: right;">657.9</td>
+<td style="text-align: right;">14.63</td>
+<td style="text-align: right;">14.53</td>
+</tr>
+<tr>
+<td><strong>M3, GenAI</strong></td>
+<td style="text-align: right;"><strong>258.1</strong></td>
+<td style="text-align: right;"><strong>680.0</strong></td>
+<td style="text-align: right;"><strong>14.64</strong></td>
+<td style="text-align: right;"><strong>14.57</strong></td>
+</tr>
+<tr>
+<td>M1 int8 prefill</td>
+<td style="text-align: right;">616.3</td>
+<td style="text-align: right;">693.4</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">–</td>
+</tr>
+<tr>
+<td>M2 int8 prefill</td>
+<td style="text-align: right;">638.2</td>
+<td style="text-align: right;">715.1</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">–</td>
+</tr>
+<tr>
+<td><strong>M3 int8 prefill</strong></td>
+<td style="text-align: right;"><strong>668.6</strong></td>
+<td style="text-align: right;"><strong>740.4</strong></td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">–</td>
+</tr>
+</tbody>
+</table>
+<p>M1 and M2 use <strong>different tools</strong>, so that step is not like-for-like. <code>paged_bench_llm_27b</code> was
+the PR's own PagedAttention tool, removed from the PR before it merged; GenAI's <code>VLMPipeline</code> is
+the production path. GenAI decodes about 3% slower than the old tool and prefills faster. M2 -&gt; M3
+is the same tool on newer OpenVINO: prefill +3.4% (pp512), decode flat.</p>
+<h3>ggml-vulkan</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th style="text-align: right;">pp128</th>
+<th style="text-align: right;">pp512</th>
+<th style="text-align: right;">tg32</th>
+<th style="text-align: right;">tg128</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>M0, as published (Mesa 26.1.3)</td>
+<td style="text-align: right;">161.0</td>
+<td style="text-align: right;">165.4</td>
+<td style="text-align: right;">12.32</td>
+<td style="text-align: right;">12.31</td>
+</tr>
+<tr>
+<td>M1 (Mesa 26.2.4)</td>
+<td style="text-align: right;">171.2</td>
+<td style="text-align: right;">169.5</td>
+<td style="text-align: right;">12.70</td>
+<td style="text-align: right;">12.70</td>
+</tr>
+<tr>
+<td><strong>M3</strong> (Mesa 26.2.4)</td>
+<td style="text-align: right;"><strong>172.4</strong></td>
+<td style="text-align: right;"><strong>168.7</strong></td>
+<td style="text-align: right;"><strong>12.72</strong></td>
+<td style="text-align: right;"><strong>12.71</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>The Vulkan binary has not changed since 2026-10-07.</strong> The +7% pp128, +2% pp512 and +3% decode since M0
+come from <code>mesa-vulkan-drivers</code> being upgraded 26.1.3 -&gt; 26.2.4 on 2026-10-09, the day after the
+original report. The OpenCL / Level Zero stack that OpenVINO uses (<code>intel-opencl-icd</code>,
+<code>libze-intel-gpu1</code> 26.31.39395.13, <code>libigc2</code> 2.36.5) did not change in this period, so the
+OpenVINO rows are driver-stable across all four milestones.</p>
+<hr /></section><section class="panel" role="tabpanel" id="tab-3-gaps-over-time" aria-labelledby="btn-tab-3-gaps-over-time" hidden><h2>Gaps over time</h2><table>
+<thead>
+<tr>
+<th>ratio</th>
+<th style="text-align: right;">M0</th>
+<th style="text-align: right;">M1</th>
+<th style="text-align: right;">M2</th>
+<th style="text-align: right;">M3</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>native / ggml-openvino, decode</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">1.12x</td>
+<td style="text-align: right;">1.10x</td>
+<td style="text-align: right;"><strong>1.10x</strong></td>
+</tr>
+<tr>
+<td>native / ggml-openvino, pp512</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">1.19x</td>
+<td style="text-align: right;">1.21x</td>
+<td style="text-align: right;"><strong>1.27x</strong></td>
+</tr>
+<tr>
+<td>native / ggml-openvino, pp512 int8</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">1.20x</td>
+<td style="text-align: right;">1.24x</td>
+<td style="text-align: right;"><strong>1.30x</strong></td>
+</tr>
+<tr>
+<td>ggml-openvino / Vulkan, decode</td>
+<td style="text-align: right;">0.99x</td>
+<td style="text-align: right;">1.06x</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;"><strong>1.04x</strong></td>
+</tr>
+<tr>
+<td>ggml-openvino / Vulkan, pp512</td>
+<td style="text-align: right;">3.19x</td>
+<td style="text-align: right;">3.16x</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;"><strong>3.18x</strong></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Decode gap to native closed 1.12x -&gt; 1.10x.</strong> That is all of this branch's work, net of the
+  newer OpenVINO costing ggml-openvino about 1.5%.</li>
+<li><strong>The pp512 gap to native widened 1.19x -&gt; 1.27x.</strong> This is not a regression on our side
+  (ggml-openvino pp512 stays at 527-544 throughout). The native reference improved: first from the
+  tool change, then from OpenVINO master.</li>
+<li><strong>Decode against Vulkan went from a tie to a 4-6% lead.</strong> The original report called decode a
+  tie on an ~80 GB/s bandwidth wall; this machine actually peaks at 153.6 GB/s, and ggml-openvino
+  now decodes faster than Vulkan even though Vulkan got its own driver uplift.</li>
+</ul>
+<h3>What moved decode, step by step</h3>
+<p>Each row is a <strong>same-session A/B</strong>, which is the only kind of comparison here free of
+machine-level drift:</p>
+<table>
+<thead>
+<tr>
+<th>step</th>
+<th>change</th>
+<th>tg128</th>
+<th style="text-align: right;">delta</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>M0 -&gt; M1</td>
+<td>shape-from-mask, KV-4D, KV-slice off, GDN native state layout</td>
+<td>12.24 -&gt; 13.46</td>
+<td style="text-align: right;"><strong>+10.0%</strong></td>
+</tr>
+<tr>
+<td>M1 -&gt; M2</td>
+<td>OpenVINO PR <code>5c6d4692ee</code> -&gt; <code>4185ce2f15</code> (same llama.cpp)</td>
+<td>13.47 -&gt; 13.21</td>
+<td style="text-align: right;">−1.9%</td>
+</tr>
+<tr>
+<td>M2 -&gt; M3</td>
+<td>OpenVINO master, same llama.cpp</td>
+<td>13.21 -&gt; 13.23</td>
+<td style="text-align: right;">≈0</td>
+</tr>
+<tr>
+<td>M3</td>
+<td><code>dev_backend_openvino</code> sync, same OpenVINO</td>
+<td>13.23 -&gt; 13.28</td>
+<td style="text-align: right;">+0.4%</td>
+</tr>
+</tbody>
+</table>
+<hr /></section><section class="panel" role="tabpanel" id="tab-4-why-the-remaining-gap-exists" aria-labelledby="btn-tab-4-why-the-remaining-gap-exists" hidden><h2>Why the remaining gap exists</h2><p>Unchanged by anything since 10-17, and documented in detail in <code>BONSAI2_TERNARY_OV_REPORT.md</code> §4.1:</p>
+<ul>
+<li>The GPU is <strong>~100% busy on both paths</strong> (xe-PMU compute occupancy), so the gap is not host
+  dispatch and not idle time.</li>
+<li>The ternary GEMVs are identical on both paths and already reach <strong>106 GB/s</strong>, 69% of peak.</li>
+<li>The whole difference is <strong>non-GEMV graph overhead</strong>. Its largest piece is the GatedDeltaNet
+  recurrent state crossing the f32/f16 boundary every token: 48 <code>Convert</code> + 96 <code>Result</code> per
+  token, ~3.4 ms. ggml owns that state in f32, so removing it needs a device-resident recurrent
+  state rather than a local change.</li>
+</ul>
+<hr /></section><section class="panel" role="tabpanel" id="tab-5-measurement-notes" aria-labelledby="btn-tab-5-measurement-notes" hidden><h2>Measurement notes</h2><ul>
+<li><strong>Decode must be measured with <code>-n</code> alone on the OpenVINO backend.</strong> <code>-p … -n …</code> contaminates
+  the first decode cell (OpenVINO compiles per token count). Vulkan is immune: the combined and
+  separate runs agree to 0.2%.</li>
+<li><strong>Cross-date comparisons carry machine drift.</strong> The Vulkan step shows a driver can move results
+  by several percent with identical code. Claims about <em>this branch's</em> effect come from same-session
+  A/Bs only.</li>
+<li><strong>Two knobs were renamed in this period, and both old names are silently ignored:</strong>
+  <code>OV_TERNOCL_INT2_INT8_PREFILL</code> -&gt; <code>OV_GPU_TERNOCL_INT2_INT8_PREFILL</code> (OpenVINO), and
+  <code>GGML_OPENVINO_DISABLE_KV_SLICE=1</code> -&gt; <code>GGML_OPENVINO_KV_SLICE=0</code> (llama.cpp). The latter no longer
+  affects Bonsai decode.</li>
+<li><strong>On current OpenVINO, check TernOCL is live by speed.</strong> <code>OV_TERNOCL_INT2_DEBUG</code> no longer
+  exists, and the accept/reject trace needs a debug-caps build. TernOCL off is ~1.4 t/s prefill.</li>
+<li><strong><code>cavusmustafa/openvino</code> master is a stale June mirror</strong> without the PR. Build upstream
+  <code>openvinotoolkit/openvino</code> master.</li>
+</ul>
+<hr /></section><section class="panel" role="tabpanel" id="tab-6-reproducing" aria-labelledby="btn-tab-6-reproducing" hidden><h2>Reproducing</h2><pre><code class="language-sh"># OpenVINO master + GenAI, built as:
+#   cmake -B build-master -DOPENVINO_EXTRA_MODULES=&lt;openvino.genai&gt; -DENABLE_PYTHON=ON \
+#         -DGPU_RT_TYPE=OCL -DENABLE_SYSTEM_OPENCL=OFF ...   (see ternocl_int2_bonsai2_from_scratch.md)
+./bench_master.sh       # every row of the latest table: ggml-openvino (synced + pre-sync) and GenAI
+./bench_bonsai.sh       # ggml-openvino vs ggml-vulkan
+./bench_genai.sh        # GenAI only, on the PR-head build
+</code></pre>
+<p>GenAI needs the model directory assembled per the PR doc, step 4: the u2 IR plus the Qwen3.5
+tokenizer, config and vision encoders from the Bonsai 1 template export.</p>
+<hr /></section><section class="panel" role="tabpanel" id="tab-7-next-steps" aria-labelledby="btn-tab-7-next-steps" hidden><h2>Next steps</h2><ol>
+<li><strong>Device-resident GDN recurrent state</strong> (~+4.7%, to ~14.0 t/s; would take the decode gap to
+   native to ~1.04x). The hard part is correctness when llama.cpp clears and copies state slots
+   through the compute graph. <code>GGML_OPENVINO_STATEFUL_EXECUTION=1</code> does not cover recurrent state.</li>
+<li><strong>Bisect the ~1.5% decode loss</strong> between OpenVINO <code>5c6d4692ee</code> and master.</li>
+<li><strong>PTQ1_0 support</strong> (Bonsai 1) in ggml-openvino. OpenVINO's GGUF frontend has it, with reference
+   vectors.</li>
+<li><strong>Prefill against GenAI</strong> (pp512 1.27x) has widened. Worth a profile to see whether it is graph
+   overhead again or something GenAI's pipeline does differently at prefill.</li>
+<li><strong>Upstreaming</strong> is still blocked: PQ2_0 is PrismML-fork-local, so the ternary work cannot go to
+   <code>dev_backend_openvino</code> until those types land in llama.cpp master, or it goes to PrismML instead.</li>
+</ol></section>
+  <p class="foot">Standalone build of <code>BONSAI2_RESULTS_20261030.md</code> — all diagrams inlined,
+  no external assets. Regenerate with <code>python3 make_bonsai2_html.py BONSAI2_RESULTS_20261030.md</code>.</p>
+</div>
+<script>
+(function(){
+  var strip=document.querySelector('.tabs');
+  var tabs=[].slice.call(document.querySelectorAll('.tab'));
+  var panels=[].slice.call(document.querySelectorAll('.panel'));
+  function show(i,focus){
+    tabs.forEach(function(t,j){
+      var on=i===j;
+      t.setAttribute('aria-selected',on?'true':'false');
+      t.tabIndex=on?0:-1;
+      panels[j].classList.toggle('is-active',on);
+      panels[j].hidden=!on;
+    });
+    if(focus) tabs[i].focus();
+    if(history.replaceState) history.replaceState(null,'','#'+panels[i].id);
+  }
+  strip.addEventListener('click',function(e){
+    var b=e.target.closest('.tab'); if(b) show(tabs.indexOf(b),false);
+  });
+  strip.addEventListener('keydown',function(e){
+    var i=tabs.indexOf(document.activeElement); if(i<0) return;
+    var n={ArrowRight:i+1,ArrowLeft:i-1,Home:0,End:tabs.length-1}[e.key];
+    if(n===undefined) return;
+    e.preventDefault(); show((n+tabs.length)%tabs.length,true);
+  });
+  var h=location.hash.slice(1);
+  var k=panels.findIndex(function(p){return p.id===h;});
+  show(k>=0?k:0,false);
+})();
+</script>
+</body>
+</html>

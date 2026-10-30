@@ -97,7 +97,7 @@ built in. ggml-openvino is this branch **after syncing with `ravi9/dev_backend_o
 | **ggml-openvino**, default settings | 236.2 | 541.4 | 13.14 | 13.16 |
 | **ggml-openvino**, int8 prefill | 546.8 | 570.9 | - | - |
 | ggml-openvino before the sync (same OpenVINO) | 236.3 | 544.7 | 13.19 | 13.23 |
-| **ggml-vulkan** | 171.2 | 169.5 | 12.70 | 12.70 |
+| **ggml-vulkan** | 172.4 | 168.7 | 12.72 | 12.71 |
 | ggml-openvino, TernOCL disabled | 1.4 | - | 1.24 | - |
 
 "int8 prefill" means **`OV_GPU_TERNOCL_INT2_INT8_PREFILL=1`**. The old
@@ -105,7 +105,7 @@ built in. ggml-openvino is this branch **after syncing with `ravi9/dev_backend_o
 the default). Builds up to the PR revision `5c6d4692ee` read only the old name.
 
 GenAI / ggml-openvino: pp128 **1.09x**, pp512 **1.27x**, decode **1.10x** (int8 prefill on both:
-1.22x / 1.30x). ggml-openvino / Vulkan: pp512 **3.16x** (3.37x with int8 prefill), decode **1.05x**.
+1.22x / 1.30x). ggml-openvino / Vulkan: pp512 **3.18x** (3.38x with int8 prefill), decode **1.04x**.
 
 **The sync is neutral on this model.** Against the pre-sync branch on the same OpenVINO, decode
 moves 13.23 -> 13.28 (+0.4%) and prefill stays within noise. The 69 synced backend commits target
@@ -142,8 +142,8 @@ end-to-end check that the GGUF -> IR weight mapping is correct.
 
 ### Prefill
 
-ggml-openvino is **3.16x ggml-vulkan at pp512** (536 vs 169), and **3.37x** with int8 prefill
-(571). Vulkan is flat from pp128 to pp512 (171 -> 169) while OV scales (237 -> 536), which is what a
+ggml-openvino is **3.18x ggml-vulkan at pp512** (536 vs 169), and **3.38x** with int8 prefill
+(571). Vulkan is flat from pp128 to pp512 (172 -> 169) while OV scales (237 -> 536), which is what a
 tiled DPAS GEMM should do against a per-token kernel.
 
 Int8 prefill is off by default in the PR but is a large win at short prompts: **2.3x at pp128**

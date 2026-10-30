@@ -18,7 +18,7 @@ Last updated 2026-10-30 (results on OpenVINO master); 2026-10-17: sections 8 and
 | **Model** | Bonsai 2 27B, a ternary (-1 / 0 / +1) quantization of a 27 B hybrid-attention LLM. 6.70 GiB at 2.13 bits per weight, vs ~54 GB at fp16. |
 | **Goal** | Run it through llama.cpp's OpenVINO backend on an Intel GPU, using the new 2-bit OpenCL kernels from OpenVINO PR #38460, and compare against Vulkan and against native OpenVINO. |
 | **Work needed** | 161 lines across 7 files to make it run, then four more changes to close part of the decode gap. |
-| **Outcome** | Correct output, **3.16x faster prefill than Vulkan** (536 vs 169 t/s), and decode improved 12.24 -> 13.46 t/s. On OpenVINO master, real **OpenVINO GenAI** is 1.10x ahead on decode and 1.27x on pp512. |
+| **Outcome** | Correct output, **3.18x faster prefill than Vulkan** (536 vs 169 t/s), and decode improved 12.24 -> 13.46 t/s. On OpenVINO master, real **OpenVINO GenAI** is 1.10x ahead on decode and 1.27x on pp512. |
 | **Biggest surprise** | Without the PR's 2-bit kernels, the same model runs **167x slower**. The kernels are not an optimization, they are the difference between usable and unusable. |
 | **Correction** | This page previously said decode was a tie limited by an ~80 GB/s bandwidth wall. Both halves were wrong - the peak is 153.6 GB/s and the limit was integration overhead. See section 9. |
 
@@ -350,7 +350,7 @@ Intel Arc B390 iGPU, same GPU and same model file for every row, all on **OpenVI
 | **OpenVINO GenAI**, int8 prefill | **668.6** | **740.4** | - | - |
 | **ggml-openvino** + ternary kernels | 236.9 | 536.1 | 13.27 | 13.28 |
 | **ggml-openvino**, int8 prefill | 546.8 | 570.9 | - | - |
-| **ggml-vulkan** | 171.2 | 169.5 | 12.70 | 12.70 |
+| **ggml-vulkan** | 172.4 | 168.7 | 12.72 | 12.71 |
 | ggml-openvino, ternary kernels off | 1.4 | - | 1.24 | - |
 
 "int8 prefill" is `OV_GPU_TERNOCL_INT2_INT8_PREFILL=1` (section 7). ggml-openvino runs with
@@ -359,8 +359,8 @@ prefill t/s is prompt tokens / first-token latency at an exact 128- or 512-token
 decode is llm_bench's 2nd-token throughput.
 
 GenAI / ggml-openvino: pp128 **1.09x**, pp512 **1.27x**, decode **1.10x** (int8 prefill on both:
-1.22x / 1.30x). ggml-openvino / Vulkan: pp512 **3.16x** (3.37x with int8 prefill), decode
-**1.05x**.
+1.22x / 1.30x). ggml-openvino / Vulkan: pp512 **3.18x** (3.38x with int8 prefill), decode
+**1.04x**.
 
 Syncing with the latest `dev_backend_openvino` was **neutral** for this model: +0.4% decode
 against the pre-sync branch on the same OpenVINO, prefill within noise. The synced commits target
@@ -382,8 +382,8 @@ faster under ggml-openvino (13.47 vs 13.28 t/s on OpenVINO master).
 
 </details>
 
-**Prefill: OpenVINO wins by 3.16x** at a 512-token prompt (3.37x with int8 prefill). The shape of
-the curve is as informative as the ratio - Vulkan is flat from 128 to 512 tokens (171 -> 169 t/s),
+**Prefill: OpenVINO wins by 3.18x** at a 512-token prompt (3.38x with int8 prefill). The shape of
+the curve is as informative as the ratio - Vulkan is flat from 128 to 512 tokens (172 -> 169 t/s),
 which is what a per-token kernel does, while OpenVINO scales (237 -> 536), which is what a tiled
 GEMM does.
 

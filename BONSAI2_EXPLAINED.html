@@ -93,7 +93,7 @@ engineering version are in <code>BONSAI2_TERNARY_OV_REPORT.md</code>; this file 
 </tr>
 <tr>
 <td><strong>Outcome</strong></td>
-<td>Correct output, <strong>3.16x faster prefill than Vulkan</strong> (536 vs 169 t/s), and decode improved 12.24 -&gt; 13.46 t/s. On OpenVINO master, real <strong>OpenVINO GenAI</strong> is 1.10x ahead on decode and 1.27x on pp512.</td>
+<td>Correct output, <strong>3.18x faster prefill than Vulkan</strong> (536 vs 169 t/s), and decode improved 12.24 -&gt; 13.46 t/s. On OpenVINO master, real <strong>OpenVINO GenAI</strong> is 1.10x ahead on decode and 1.27x on pp512.</td>
 </tr>
 <tr>
 <td><strong>Biggest surprise</strong></td>
@@ -1160,9 +1160,9 @@ machine, so there is less headroom left to recover.</p>
 <rect x="216" y="208" width="6.0" height="19" fill="#2f6fb3"/>
 <text x="731.9" y="222" font-size="11.5" font-weight="600" fill="#1b1f24">536.1</text>
 <text x="205" y="246" font-size="11.5" text-anchor="end" fill="#1b1f24">vulkan</text>
-<rect x="216" y="232" width="160.6" height="19" rx="4" fill="#c77c1e"/>
+<rect x="216" y="232" width="159.8" height="19" rx="4" fill="#c77c1e"/>
 <rect x="216" y="232" width="6.0" height="19" fill="#c77c1e"/>
-<text x="384.6" y="246" font-size="11.5" font-weight="600" fill="#1b1f24">169.5</text>
+<text x="383.8" y="246" font-size="11.5" font-weight="600" fill="#1b1f24">168.7</text>
 <text x="24" y="290" font-size="14" font-weight="600" fill="#1b1f24">Prefill, 128-token prompt  (t/s)</text>
 <line x1="215" y1="302" x2="215" y2="422" stroke="#8a93a0"/>
 <text x="205" y="316" font-size="11.5" text-anchor="end" fill="#1b1f24">GenAI int8</text>
@@ -1182,9 +1182,9 @@ machine, so there is less headroom left to recover.</p>
 <rect x="216" y="374" width="6.0" height="19" fill="#2f6fb3"/>
 <text x="448.4" y="388" font-size="11.5" font-weight="600" fill="#1b1f24">236.9</text>
 <text x="205" y="412" font-size="11.5" text-anchor="end" fill="#1b1f24">vulkan</text>
-<rect x="216" y="398" width="162.2" height="19" rx="4" fill="#c77c1e"/>
+<rect x="216" y="398" width="163.3" height="19" rx="4" fill="#c77c1e"/>
 <rect x="216" y="398" width="6.0" height="19" fill="#c77c1e"/>
-<text x="386.2" y="412" font-size="11.5" font-weight="600" fill="#1b1f24">171.2</text>
+<text x="387.3" y="412" font-size="11.5" font-weight="600" fill="#1b1f24">172.4</text>
 <text x="24" y="456" font-size="14" font-weight="600" fill="#1b1f24">Decode, 128 tokens  (t/s)</text>
 <line x1="215" y1="468" x2="215" y2="540" stroke="#8a93a0"/>
 <text x="205" y="482" font-size="11.5" text-anchor="end" fill="#1b1f24">GenAI</text>
@@ -1196,12 +1196,12 @@ machine, so there is less headroom left to recover.</p>
 <rect x="216" y="492" width="6.0" height="19" fill="#2f6fb3"/>
 <text x="821.6" y="506" font-size="11.5" font-weight="600" fill="#1b1f24">13.28</text>
 <text x="205" y="530" font-size="11.5" text-anchor="end" fill="#1b1f24">vulkan</text>
-<rect x="216" y="516" width="571.5" height="19" rx="4" fill="#c77c1e"/>
+<rect x="216" y="516" width="572.0" height="19" rx="4" fill="#c77c1e"/>
 <rect x="216" y="516" width="6.0" height="19" fill="#c77c1e"/>
-<text x="795.5" y="530" font-size="11.5" font-weight="600" fill="#1b1f24">12.7</text>
+<text x="796.0" y="530" font-size="11.5" font-weight="600" fill="#1b1f24">12.71</text>
 <rect x="24" y="566" width="952" height="96" rx="6" fill="#f7f9fb"/>
 <text x="40" y="591" font-size="13" font-weight="600" fill="#1b1f24">Reading it</text>
-<text x="40" y="614" font-size="12.5" fill="#1b1f24">GenAI leads ggml-openvino by 1.10x on decode and 1.27x on pp512; ggml-openvino leads Vulkan by 3.16x on pp512.</text>
+<text x="40" y="614" font-size="12.5" fill="#1b1f24">GenAI leads ggml-openvino by 1.10x on decode and 1.27x on pp512; ggml-openvino leads Vulkan by 3.18x on pp512.</text>
 <text x="40" y="634" font-size="12.5" fill="#1b1f24">int8 prefill = OV_GPU_TERNOCL_INT2_INT8_PREFILL=1 (prefill only, 2.3x at pp128). The old OV_TERNOCL_... name is ignored here.</text>
 <text x="40" y="654" font-size="11.5" fill="#6b7480">GenAI prefill = prompt tokens / first-token latency (llm_bench); decode = 2nd-token throughput.</text>
 </svg></figure></p>
@@ -1250,10 +1250,10 @@ machine, so there is less headroom left to recover.</p>
 </tr>
 <tr>
 <td><strong>ggml-vulkan</strong></td>
-<td style="text-align: right;">171.2</td>
-<td style="text-align: right;">169.5</td>
-<td style="text-align: right;">12.70</td>
-<td style="text-align: right;">12.70</td>
+<td style="text-align: right;">172.4</td>
+<td style="text-align: right;">168.7</td>
+<td style="text-align: right;">12.72</td>
+<td style="text-align: right;">12.71</td>
 </tr>
 <tr>
 <td>ggml-openvino, ternary kernels off</td>
@@ -1269,8 +1269,8 @@ machine, so there is less headroom left to recover.</p>
 prefill t/s is prompt tokens / first-token latency at an exact 128- or 512-token prompt; GenAI
 decode is llm_bench's 2nd-token throughput.</p>
 <p>GenAI / ggml-openvino: pp128 <strong>1.09x</strong>, pp512 <strong>1.27x</strong>, decode <strong>1.10x</strong> (int8 prefill on both:
-1.22x / 1.30x). ggml-openvino / Vulkan: pp512 <strong>3.16x</strong> (3.37x with int8 prefill), decode
-<strong>1.05x</strong>.</p>
+1.22x / 1.30x). ggml-openvino / Vulkan: pp512 <strong>3.18x</strong> (3.38x with int8 prefill), decode
+<strong>1.04x</strong>.</p>
 <p>Syncing with the latest <code>dev_backend_openvino</code> was <strong>neutral</strong> for this model: +0.4% decode
 against the pre-sync branch on the same OpenVINO, prefill within noise. The synced commits target
 other models, the NPU and <code>-fa off</code>.</p>
@@ -1328,8 +1328,8 @@ faster under ggml-openvino (13.47 vs 13.28 t/s on OpenVINO master).</p>
 </tbody>
 </table>
 </details>
-<p><strong>Prefill: OpenVINO wins by 3.16x</strong> at a 512-token prompt (3.37x with int8 prefill). The shape of
-the curve is as informative as the ratio - Vulkan is flat from 128 to 512 tokens (171 -&gt; 169 t/s),
+<p><strong>Prefill: OpenVINO wins by 3.18x</strong> at a 512-token prompt (3.38x with int8 prefill). The shape of
+the curve is as informative as the ratio - Vulkan is flat from 128 to 512 tokens (172 -&gt; 169 t/s),
 which is what a per-token kernel does, while OpenVINO scales (237 -&gt; 536), which is what a tiled
 GEMM does.</p>
 <p><strong>Decode is not a tie.</strong> An earlier version of this page said it was, and that both backends were
@@ -1641,7 +1641,7 @@ GGML_OPENVINO_DEVICE=GPU ./build-pr/bin/llama-cli \
 and that compile takes tens of seconds on a 27 B model. <code>llama-bench --no-warmup</code> puts it <em>inside</em>
 the measured run and reports 4 t/s instead of 234. Always let it warm up.</p></section>
   <p class="foot">Standalone build of <code>BONSAI2_EXPLAINED.md</code> — all diagrams inlined,
-  no external assets. Regenerate with <code>python3 make_bonsai2_html.py</code>.</p>
+  no external assets. Regenerate with <code>python3 make_bonsai2_html.py BONSAI2_EXPLAINED.md</code>.</p>
 </div>
 <script>
 (function(){

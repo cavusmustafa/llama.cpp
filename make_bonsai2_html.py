@@ -4,7 +4,8 @@
 Single file, no network and no local assets at run time: every referenced SVG is
 inlined. The document is long, so each top-level `## ` section becomes a tab.
 
-    python3 make_bonsai2_html.py          # -> BONSAI2_EXPLAINED.html
+    python3 make_bonsai2_html.py                       # -> BONSAI2_EXPLAINED.html
+    python3 make_bonsai2_html.py BONSAI2_RESULTS_20261030.md   # -> BONSAI2_RESULTS_20261030.html
 """
 
 import html
@@ -14,8 +15,11 @@ import re
 import markdown
 
 HERE = pathlib.Path(__file__).parent
-SRC = HERE / "BONSAI2_EXPLAINED.md"
-OUT = HERE / "BONSAI2_EXPLAINED.html"
+import sys
+
+# Optional: make_bonsai2_html.py <src.md> [out.html]; defaults to the explainer.
+SRC = pathlib.Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else HERE / "BONSAI2_EXPLAINED.md"
+OUT = pathlib.Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else SRC.with_suffix(".html")
 
 text = SRC.read_text(encoding="utf-8")
 
@@ -180,8 +184,8 @@ doc = f"""<!doctype html>
   <div class="standfirst">{render(intro_md)}</div>
   <div class="tabs" role="tablist" aria-label="Sections">{''.join(tabs)}</div>
   {''.join(panels)}
-  <p class="foot">Standalone build of <code>BONSAI2_EXPLAINED.md</code> — all diagrams inlined,
-  no external assets. Regenerate with <code>python3 make_bonsai2_html.py</code>.</p>
+  <p class="foot">Standalone build of <code>{SRC.name}</code> — all diagrams inlined,
+  no external assets. Regenerate with <code>python3 make_bonsai2_html.py {SRC.name}</code>.</p>
 </div>
 <script>{JS}</script>
 </body>
