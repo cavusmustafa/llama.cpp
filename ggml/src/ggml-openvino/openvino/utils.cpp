@@ -7,6 +7,8 @@
 #include <ctime>
 #include <memory>
 #include <openvino/op/add.hpp>
+#include <openvino/op/bitwise_and.hpp>
+#include <openvino/op/bitwise_right_shift.hpp>
 #include <openvino/op/clamp.hpp>
 #include <openvino/op/convert.hpp>
 #include <openvino/op/cos.hpp>
@@ -22,6 +24,7 @@
 #include <openvino/op/squeeze.hpp>
 #include <openvino/op/subtract.hpp>
 #include <openvino/op/transpose.hpp>
+#include <openvino/op/unsqueeze.hpp>
 #include <string>
 
 namespace ov {
@@ -362,6 +365,34 @@ ov::Output<ov::Node> process_view_input(const NodeContext & context, int input_i
 
 namespace {
 
+// Gather rows of a ternary u2 Constant [N, K/G, G] (make_int2_weights) and unpack them to i32
+// codes. The GPU gather kernels have no u2 input, so read the table as its packed bytes, gather
+// whole rows of those, and unpack only the selected rows (LSB-first, 4 codes per byte).
+std::shared_ptr<ov::Node> gather_u2_rows(const std::shared_ptr<ov::op::v0::Constant> & cnst,
+                                         const ov::Output<ov::Node> & indices,
+                                         size_t idx_rank) {
+    const auto & shape = cnst->get_shape();
+    if (shape.size() != 3 || shape[2] % 4 != 0) {
+        return nullptr;
+    }
+    auto packed = std::make_shared<ov::op::v0::Constant>(ov::element::u8, ov::Shape{shape[0], shape[1], shape[2] / 4},
+                                                         cnst->get_data_ptr(), cnst);
+    auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {0});
+    auto rows = std::make_shared<ov::op::v8::Gather>(packed, indices, axis);
+    auto bytes = std::make_shared<ov::op::v0::Unsqueeze>(
+        std::make_shared<ov::op::v0::Convert>(rows, ov::element::i32),
+        ov::op::v0::Constant::create(ov::element::i64, {1}, {-1}));
+    auto shifted = std::make_shared<ov::op::v15::BitwiseRightShift>(
+        bytes, ov::op::v0::Constant::create(ov::element::i32, {4}, {0, 2, 4, 6}));
+    auto codes = std::make_shared<ov::op::v13::BitwiseAnd>(
+        shifted, ov::op::v0::Constant::create(ov::element::i32, {}, {3}));
+    std::vector<int64_t> target(idx_rank, 0);
+    target.push_back(static_cast<int64_t>(shape[1]));
+    target.push_back(static_cast<int64_t>(shape[2]));
+    return std::make_shared<ov::op::v1::Reshape>(
+        codes, ov::op::v0::Constant::create(ov::element::i64, {target.size()}, target), true);
+}
+
 // Walk a dequantization chain, gathering `indices` out of every leaf Constant that is indexed by
 // the gathered axis, and rebuild the chain on top of the gathered rows. Only the node types
 // make_intX_weights emits are recognized; anything else aborts the rewrite (nullptr).
@@ -383,6 +414,10 @@ std::shared_ptr<ov::Node> rebuild_on_gathered_rows(const ov::Output<ov::Node> & 
         if (type == ov::element::u4 || type == ov::element::i4 || type == ov::element::u8 ||
             type == ov::element::i8) {
             saw_compressed = true;
+        }
+        if (type == ov::element::u2) {
+            saw_compressed = true;
+            return static_cast<int64_t>(shape[0]) == rows ? gather_u2_rows(cnst, indices, idx_rank) : nullptr;
         }
         if (shape.empty() || static_cast<int64_t>(shape[0]) != rows) {
             // Scalar or already-broadcast operand (e.g. a single zero point): share it unchanged.
