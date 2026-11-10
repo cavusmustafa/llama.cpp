@@ -302,7 +302,12 @@ uint64_t ggml_openvino_source_fingerprint(const void * data, size_t size, std::v
         }
     }
 #endif
-    if (ggml_openvino_model_cache_only()) {
+    // A small weight outside any file mapping is one the model loader built in memory rather than
+    // read from the GGUF (e.g. the PQ2_0 models' Hadamard matrix). It is deterministic, and the
+    // export run already identified it by the content hash below, so cache-only mode can too. Only
+    // large unmapped weights mean the model itself was not mmap-loaded.
+    constexpr size_t MAX_UNMAPPED_WEIGHT_BYTES = 64u << 20;
+    if (ggml_openvino_model_cache_only() && size > MAX_UNMAPPED_WEIGHT_BYTES) {
         GGML_ABORT("ggml-openvino: could not identify mapped GGUF weight; use --load-mode mmap");
     }
     uint64_t h = FNV_OFFSET;
