@@ -1,0 +1,31 @@
+== after  (run 18s)
+     t(s)   system   anon   file   drv~    gtt   event
+      0.0     -0.0    0.0    0.0    0.0    0.0   read_begin
+      0.4     -0.0    0.1    0.1    0.0    0.0   compile_begin
+      0.4     -0.0    0.1    0.1    0.0    0.0   read_end
+      9.2      9.4    0.3    4.2    9.1    8.8   <<< SYSTEM PEAK
+      9.6      9.4    0.3    4.2    9.1    8.8   <<< ANON+GTT PEAK (process-exact)
+      9.6      9.4    0.3    4.2    9.1    8.8   <<< GTT PEAK
+     10.9      9.1    0.3    4.2    8.9    8.6   compile_end
+     13.9      9.1    0.3    0.1    8.8    8.6   after_del_model
+     17.3      7.9    0.1    0.1    7.8    5.9   after_del_compiled
+   ts    0.0  sys  -0.0 anon   0.0 gtt   0.0
+   ts    1.0  sys  -0.0 anon   0.1 gtt   0.0
+   ts    2.0  sys  -0.0 anon   0.1 gtt   0.0
+   ts    3.0  sys  -0.0 anon   0.1 gtt   0.0
+   ts    4.0  sys   2.0 anon   2.1 gtt   0.0
+   ts    5.0  sys   4.1 anon   4.2 gtt   0.0
+   ts    6.0  sys   5.8 anon   2.6 gtt   2.8
+   ts    7.0  sys   7.4 anon   0.1 gtt   6.7
+   ts    8.1  sys   8.4 anon   0.3 gtt   7.8
+   ts    9.1  sys   9.4 anon   0.3 gtt   8.8
+   ts   10.1  sys   9.4 anon   0.3 gtt   8.8
+   ts   11.1  sys   9.1 anon   0.3 gtt   8.6
+   ts   12.1  sys   9.1 anon   0.3 gtt   8.6
+   ts   13.1  sys   9.1 anon   0.3 gtt   8.6
+   ts   14.1  sys   8.2 anon   0.3 gtt   7.2
+   ts   15.1  sys   7.9 anon   0.1 gtt   6.0
+   ts   16.2  sys   7.9 anon   0.1 gtt   6.0
+   ts   17.2  sys   7.9 anon   0.1 gtt   6.0
+   max during compile_model             : system   9.4  anon   0.3  driver~   9.1 GiB
+   max after compile (first inference + decode): system   9.1 GiB

@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 520" width="1100" height="520" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="ah-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fb3"/></marker><marker id="ah-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a8c82"/></marker><marker id="ah-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c96a1b"/></marker><marker id="ah-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b8433a"/></marker><marker id="ah-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4fa0"/></marker><marker id="ah-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b7480"/></marker><marker id="ah-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a8a3a"/></marker><marker id="ah-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a07a12"/></marker><marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1b1f24"/></marker></defs>
+<rect width="1100" height="520" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24" text-anchor="start">Cause 3 (~4.2 GiB and ~48 s) - host copies of merged weights</text>
+<text x="24" y="56" font-size="13" font-weight="400" fill="#6b7480" text-anchor="start">On the TernOCL path the plugin merges Q/K/V and gate/up into single matmuls; the merged weights were new heap copies.</text>
+<rect x="40" y="100" width="150" height="50" rx="6" fill="#f1f3f5" stroke="#6b7480" stroke-width="1.5"/>
+<text x="115.0" y="121.36999999999999" font-size="11" font-weight="400" fill="#1b1f24" text-anchor="middle">W_gate</text>
+<text x="115.0" y="136.54999999999998" font-size="11" font-weight="400" fill="#1b1f24" text-anchor="middle">(file / ggml memory)</text>
+<rect x="40" y="170" width="150" height="50" rx="6" fill="#f1f3f5" stroke="#6b7480" stroke-width="1.5"/>
+<text x="115.0" y="191.37" font-size="11" font-weight="400" fill="#1b1f24" text-anchor="middle">W_up</text>
+<text x="115.0" y="206.55" font-size="11" font-weight="400" fill="#1b1f24" text-anchor="middle">(file / ggml memory)</text>
+<line x1="190" y1="125" x2="250" y2="150" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="250.0,150.0 243.4,142.4 240.0,150.7" fill="#1b1f24"/>
+<line x1="190" y1="195" x2="250" y2="170" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="250.0,170.0 240.0,169.3 243.4,177.6" fill="#1b1f24"/>
+<rect x="250" y="125" width="220" height="70" rx="6" fill="#f6dedb" stroke="#b8433a" stroke-width="1.5"/>
+<text x="360.0" y="156.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">concat_and_fold:</text>
+<text x="360.0" y="172.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">new host copy of both</text>
+<line x1="470" y1="160" x2="520" y2="160" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="520.0,160.0 511.0,155.5 511.0,164.5" fill="#1b1f24"/>
+<rect x="520" y="125" width="200" height="70" rx="6" fill="#e4f1ef" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="620.0" y="156.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">upload to GPU</text>
+<text x="620.0" y="172.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">(constant.cpp)</text>
+<line x1="720" y1="160" x2="770" y2="160" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="770.0,160.0 761.0,155.5 761.0,164.5" fill="#1b1f24"/>
+<rect x="770" y="110" width="290" height="100" rx="6" fill="#f6dedb" stroke="#b8433a" stroke-width="1.5"/>
+<text x="915.0" y="139.48" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">host copy stays alive for the</text>
+<text x="915.0" y="156.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">whole program build (~60 s),</text>
+<text x="915.0" y="172.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">next to its GPU copy and the</text>
+<text x="915.0" y="189.15999999999997" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">TernOCL-packed copy</text>
+<text x="40" y="248.0" font-size="12" font-weight="400" fill="#b8433a" text-anchor="start">Also: folding used get_constant_from_source, which evaluates value bounds on the concatenated u2 data - slow.</text>
+<text x="40" y="264.2" font-size="12" font-weight="400" fill="#b8433a" text-anchor="start">That was most of the '48 s TernOCL compile cost' measured before. Compile: ~63 s -&gt; ~10 s.</text>
+<text x="40" y="306" font-size="13" font-weight="600" fill="#3a8a3a" text-anchor="start">After: an evictable buffer, using a hook the plugin already calls after each upload</text>
+<rect x="40" y="320" width="230" height="60" rx="6" fill="#e2f0e2" stroke="#3a8a3a" stroke-width="1.5"/>
+<text x="155.0" y="346.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">concat into an</text>
+<text x="155.0" y="362.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">anonymous mmap</text>
+<rect x="300" y="320" width="230" height="60" rx="6" fill="#e2f0e2" stroke="#3a8a3a" stroke-width="1.5"/>
+<text x="415.0" y="346.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">upload to GPU</text>
+<text x="415.0" y="362.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">as before</text>
+<line x1="270" y1="350" x2="300" y2="350" stroke="#3a8a3a" stroke-width="1.6"/>
+<polygon points="300.0,350.0 291.0,345.5 291.0,354.5" fill="#3a8a3a"/>
+<rect x="560" y="320" width="230" height="60" rx="6" fill="#e2f0e2" stroke="#3a8a3a" stroke-width="1.5"/>
+<text x="675.0" y="346.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">hint_evict():</text>
+<text x="675.0" y="362.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">madvise(DONTNEED)</text>
+<line x1="530" y1="350" x2="560" y2="350" stroke="#3a8a3a" stroke-width="1.6"/>
+<polygon points="560.0,350.0 551.0,345.5 551.0,354.5" fill="#3a8a3a"/>
+<rect x="820" y="320" width="230" height="60" rx="6" fill="#e2f0e2" stroke="#3a8a3a" stroke-width="1.5"/>
+<text x="935.0" y="346.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">read again?</text>
+<text x="935.0" y="362.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">re-fill from sources</text>
+<line x1="790" y1="350" x2="820" y2="350" stroke="#3a8a3a" stroke-width="1.6"/>
+<polygon points="820.0,350.0 811.0,345.5 811.0,354.5" fill="#3a8a3a"/>
+<rect x="40" y="400" width="1020" height="64.4" rx="6" fill="#fbf1d3" stroke="#a07a12" stroke-width="1.5"/>
+<text x="50" y="419.96" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">Why madvise and not free(): the plugin de-duplicates uploads by the raw data pointer. A freed address can be reused by the</text>
+<text x="50" y="436.52" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">next allocation and silently alias another constant's weights. madvise releases the pages but keeps the address reserved.</text>
+<text x="50" y="453.08" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">The buffer reports an 'invalid source' descriptor so the weight-sharing code ignores it; non-Linux falls back to a plain buffer.</text>
+</svg>

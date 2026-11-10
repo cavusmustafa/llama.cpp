@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 520" width="1100" height="520" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="ah-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fb3"/></marker><marker id="ah-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a8c82"/></marker><marker id="ah-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c96a1b"/></marker><marker id="ah-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b8433a"/></marker><marker id="ah-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4fa0"/></marker><marker id="ah-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b7480"/></marker><marker id="ah-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a8a3a"/></marker><marker id="ah-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a07a12"/></marker><marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1b1f24"/></marker></defs>
+<rect width="1100" height="520" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24" text-anchor="start">Step 2 - building a native OpenVINO model to compare against (one-time, ~150 GB of disk)</text>
+<text x="24" y="56" font-size="13" font-weight="400" fill="#6b7480" text-anchor="start">Native OpenVINO cannot read GGUF. PR #38460's converter needs a Bonsai 1 IR as a graph template.</text>
+<rect x="40" y="90" width="230" height="70" rx="6" fill="#f1f3f5" stroke="#6b7480" stroke-width="1.5"/>
+<text x="155.0" y="121.03999999999999" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">Bonsai 1 27B, unpacked</text>
+<text x="155.0" y="137.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">HuggingFace, 51 GB</text>
+<rect x="310" y="90" width="230" height="70" rx="6" fill="#f1f3f5" stroke="#6b7480" stroke-width="1.5"/>
+<text x="425.0" y="121.03999999999999" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">optimum-cli export</text>
+<text x="425.0" y="137.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">fp16 IR, 51 GB, ~60 GB RAM</text>
+<rect x="580" y="90" width="230" height="70" rx="6" fill="#ebe5f4" stroke="#6b4fa0" stroke-width="1.5"/>
+<text x="695.0" y="121.03999999999999" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">quantize_ir_ternary.py</text>
+<text x="695.0" y="137.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">template IR, 6.34 GiB</text>
+<line x1="270" y1="125" x2="310" y2="125" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="310.0,125.0 301.0,120.5 301.0,129.5" fill="#1b1f24"/>
+<line x1="540" y1="125" x2="580" y2="125" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="580.0,125.0 571.0,120.5 571.0,129.5" fill="#1b1f24"/>
+<rect x="580" y="200" width="230" height="70" rx="6" fill="#e4f1ef" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="695.0" y="231.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">Bonsai 2 GGUF</text>
+<text x="695.0" y="247.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">PQ2_0, 7.2 GB</text>
+<rect x="850" y="145" width="210" height="80" rx="6" fill="#ebe5f4" stroke="#6b4fa0" stroke-width="1.5"/>
+<text x="955.0" y="172.76" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">bonsai2_gguf_to_ir.py</text>
+<text x="955.0" y="189.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">graph from template,</text>
+<text x="955.0" y="205.88" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">weights from GGUF</text>
+<line x1="810" y1="125" x2="850" y2="170" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="850.0,170.0 847.4,160.3 840.7,166.3" fill="#1b1f24"/>
+<line x1="810" y1="235" x2="850" y2="200" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="850.0,200.0 840.3,202.5 846.2,209.3" fill="#1b1f24"/>
+<rect x="850" y="265" width="210" height="70" rx="6" fill="#e2f0e2" stroke="#3a8a3a" stroke-width="1.5"/>
+<text x="955.0" y="296.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">Bonsai 2 u2 IR</text>
+<text x="955.0" y="312.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">6.9 GB + 0.34 GB embed.</text>
+<line x1="955" y1="225" x2="955" y2="265" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="955.0,265.0 959.5,256.0 950.5,256.0" fill="#1b1f24"/>
+<rect x="560" y="360" width="240" height="70" rx="6" fill="#ebe5f4" stroke="#6b4fa0" stroke-width="1.5"/>
+<text x="680.0" y="391.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">paged_bench_llm_27b</text>
+<text x="680.0" y="407.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">PR's own tool (later removed)</text>
+<rect x="820" y="360" width="240" height="70" rx="6" fill="#ebe5f4" stroke="#6b4fa0" stroke-width="1.5"/>
+<text x="940.0" y="391.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">OpenVINO GenAI</text>
+<text x="940.0" y="407.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">VLMPipeline + llm_bench</text>
+<line x1="930" y1="335" x2="680" y2="360" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="680.0,360.0 689.4,363.6 688.5,354.6" fill="#1b1f24"/>
+<line x1="955" y1="335" x2="940" y2="360" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="940.0,360.0 948.5,354.6 940.8,350.0" fill="#1b1f24"/>
+<rect x="40" y="200" width="500" height="110" rx="6" fill="#e2f0e2" stroke="#3a8a3a" stroke-width="1.5"/>
+<text x="290.0" y="226.2" font-size="13" font-weight="600" fill="#3a8a3a" text-anchor="middle">Validation</text>
+<text x="290.0" y="242.76" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">Run with the PR's 21-token reference prompt, the output</text>
+<text x="290.0" y="259.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">token ids matched the PR's published ids byte-for-byte.</text>
+<text x="290.0" y="275.88" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">That proves the GGUF -&gt; IR weight mapping is right AND that</text>
+<text x="290.0" y="292.44" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">the native number is a real ceiling for these weights.</text>
+<rect x="40" y="340" width="480" height="81.19999999999999" rx="6" fill="#fbf1d3" stroke="#a07a12" stroke-width="1.5"/>
+<text x="50" y="360.08000000000004" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">Traps: pip-wheel GenAI venvs do not contain TernOCL</text>
+<text x="50" y="376.64000000000004" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">(you would measure the 1.4 t/s path). No prebuilt u2 IR</text>
+<text x="50" y="393.20000000000005" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">exists on HF; the one 'Bonsai OpenVINO' repo is a</text>
+<text x="50" y="409.76000000000005" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">different 1-bit scheme with an untrusted plugin .so.</text>
+</svg>

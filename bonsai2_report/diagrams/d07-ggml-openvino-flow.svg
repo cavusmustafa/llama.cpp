@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 470" width="1100" height="470" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="ah-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fb3"/></marker><marker id="ah-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a8c82"/></marker><marker id="ah-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c96a1b"/></marker><marker id="ah-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b8433a"/></marker><marker id="ah-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4fa0"/></marker><marker id="ah-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b7480"/></marker><marker id="ah-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a8a3a"/></marker><marker id="ah-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a07a12"/></marker><marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1b1f24"/></marker></defs>
+<rect width="1100" height="470" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24" text-anchor="start">How the OpenVINO backend runs a llama.cpp model</text>
+<text x="24" y="56" font-size="13" font-weight="400" fill="#6b7480" text-anchor="start">Compile once per graph shape, then replay it for every batch of tokens. The compile step is where the memory story (step 5) happens.</text>
+<rect x="40" y="100" width="225" height="110" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="152.5" y="142.76" font-size="13" font-weight="600" fill="#2f6fb3" text-anchor="middle">llama.cpp</text>
+<text x="152.5" y="159.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">builds a ggml graph</text>
+<text x="152.5" y="175.88" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">for this batch</text>
+<rect x="305" y="100" width="225" height="110" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="417.5" y="134.48" font-size="13" font-weight="600" fill="#2f6fb3" text-anchor="middle">ggml-openvino</text>
+<text x="417.5" y="151.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">translates every ggml op</text>
+<text x="417.5" y="167.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">weights -&gt; Constants</text>
+<text x="417.5" y="184.16" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">token dim T -&gt; dynamic</text>
+<line x1="265" y1="155" x2="305" y2="155" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="305.0,155.0 296.0,150.5 296.0,159.5" fill="#1b1f24"/>
+<rect x="570" y="100" width="225" height="110" rx="6" fill="#e4f1ef" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="682.5" y="134.48" font-size="13" font-weight="600" fill="#2a8c82" text-anchor="middle">core.compile_model</text>
+<text x="682.5" y="151.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">GPU plugin: fusions,</text>
+<text x="682.5" y="167.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">kernel choice, upload</text>
+<text x="682.5" y="184.16" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">weights to GPU memory</text>
+<line x1="530" y1="155" x2="570" y2="155" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="570.0,155.0 561.0,150.5 561.0,159.5" fill="#1b1f24"/>
+<rect x="835" y="100" width="225" height="110" rx="6" fill="#e2f0e2" stroke="#3a8a3a" stroke-width="1.5"/>
+<text x="947.5" y="142.76" font-size="13" font-weight="600" fill="#3a8a3a" text-anchor="middle">infer</text>
+<text x="947.5" y="159.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">runs the compiled model</text>
+<text x="947.5" y="175.88" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">on the GPU</text>
+<line x1="795" y1="155" x2="835" y2="155" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="835.0,155.0 826.0,150.5 826.0,159.5" fill="#1b1f24"/>
+<path d="M 917 210 C 917 290, 330 290, 330 214" stroke="#3a8a3a" stroke-width="1.6" fill="none" stroke-dasharray="5 4"/>
+<polygon points="330.0,214.0 325.5,223.0 334.5,223.0" fill="#3a8a3a"/>
+<text x="620" y="290" font-size="12" font-weight="400" fill="#3a8a3a" text-anchor="middle">next batch with the same structure: reuse the compiled model (cache hit), skip compile</text>
+<rect x="40" y="320" width="500" height="120" rx="6" fill="#fbeadb" stroke="#c96a1b" stroke-width="1.5"/>
+<text x="290.0" y="351.2" font-size="13" font-weight="600" fill="#c96a1b" text-anchor="middle">The dynamic token dimension</text>
+<text x="290.0" y="367.76" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">one compiled model must serve T = 42 (prompt),</text>
+<text x="290.0" y="384.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">T = 2 (warm-up), T = 1 (decode), ...</text>
+<text x="290.0" y="400.88" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">so no shape constant in the graph may depend on T</text>
+<text x="290.0" y="417.44" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">-&gt; the reshape bug of fix 3</text>
+<rect x="560" y="320" width="500" height="120" rx="6" fill="#f6dedb" stroke="#b8433a" stroke-width="1.5"/>
+<text x="810.0" y="351.2" font-size="13" font-weight="600" fill="#b8433a" text-anchor="middle">Compile is expensive</text>
+<text x="810.0" y="367.76" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">~10-60 s for this 27 B model (tens of thousands of ops,</text>
+<text x="810.0" y="384.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">kernel builds, weight upload/repacking)</text>
+<text x="810.0" y="400.88" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">llama-bench --no-warmup puts it INSIDE the timing:</text>
+<text x="810.0" y="417.44" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">pp128 reads 4 t/s instead of 234</text>
+</svg>

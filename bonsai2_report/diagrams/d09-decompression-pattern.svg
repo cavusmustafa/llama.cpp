@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 470" width="1100" height="470" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="ah-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fb3"/></marker><marker id="ah-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a8c82"/></marker><marker id="ah-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c96a1b"/></marker><marker id="ah-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b8433a"/></marker><marker id="ah-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4fa0"/></marker><marker id="ah-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b7480"/></marker><marker id="ah-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a8a3a"/></marker><marker id="ah-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a07a12"/></marker><marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1b1f24"/></marker></defs>
+<rect width="1100" height="470" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24" text-anchor="start">Fix 1 + fix 4 - the weight-decompression pattern the GPU plugin looks for</text>
+<text x="24" y="56" font-size="13" font-weight="400" fill="#6b7480" text-anchor="start">The backend emits ordinary ops; the plugin recognises the pattern and replaces it with one compressed matmul.</text>
+<rect x="30" y="96" width="157" height="62" rx="6" fill="#e4f1ef" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="108.5" y="123.03999999999999" font-size="13" font-weight="600" fill="#2a8c82" text-anchor="middle">Constant</text>
+<text x="108.5" y="139.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">u2 codes</text>
+<rect x="207" y="96" width="157" height="62" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="285.5" y="123.03999999999999" font-size="13" font-weight="600" fill="#2f6fb3" text-anchor="middle">Convert</text>
+<text x="285.5" y="139.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">-&gt; f16</text>
+<line x1="187" y1="127" x2="207" y2="127" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="207.0,127.0 198.0,122.5 198.0,131.5" fill="#1b1f24"/>
+<rect x="384" y="96" width="157" height="62" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="462.5" y="123.03999999999999" font-size="13" font-weight="600" fill="#2f6fb3" text-anchor="middle">Subtract</text>
+<text x="462.5" y="139.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">zero point 1</text>
+<line x1="364" y1="127" x2="384" y2="127" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="384.0,127.0 375.0,122.5 375.0,131.5" fill="#1b1f24"/>
+<rect x="561" y="96" width="157" height="62" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="639.5" y="123.03999999999999" font-size="13" font-weight="600" fill="#2f6fb3" text-anchor="middle">Multiply</text>
+<text x="639.5" y="139.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">f16 scales</text>
+<line x1="541" y1="127" x2="561" y2="127" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="561.0,127.0 552.0,122.5 552.0,131.5" fill="#1b1f24"/>
+<rect x="738" y="96" width="157" height="62" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="816.5" y="123.03999999999999" font-size="13" font-weight="600" fill="#2f6fb3" text-anchor="middle">Reshape</text>
+<text x="816.5" y="139.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">[N,K/128,128]-&gt;[N,K]</text>
+<line x1="718" y1="127" x2="738" y2="127" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="738.0,127.0 729.0,122.5 729.0,131.5" fill="#1b1f24"/>
+<rect x="915" y="96" width="157" height="62" rx="6" fill="#ebe5f4" stroke="#6b4fa0" stroke-width="1.5"/>
+<text x="993.5" y="123.03999999999999" font-size="13" font-weight="600" fill="#6b4fa0" text-anchor="middle">MatMul</text>
+<text x="993.5" y="139.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">with activations</text>
+<line x1="895" y1="127" x2="915" y2="127" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="915.0,127.0 906.0,122.5 906.0,131.5" fill="#1b1f24"/>
+<line x1="550" y1="168" x2="550" y2="212" stroke="#2a8c82" stroke-width="1.6"/>
+<polygon points="550.0,212.0 554.5,203.0 545.5,203.0" fill="#2a8c82"/>
+<text x="550.0" y="190.0" font-size="11" font-weight="400" fill="#2a8c82" text-anchor="middle">GPU plugin pattern match</text>
+<rect x="250" y="216" width="600" height="62" rx="6" fill="#e4f1ef" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="550.0" y="234.76" font-size="13" font-weight="600" fill="#2a8c82" text-anchor="middle">FullyConnectedCompressed (one op)</text>
+<text x="550.0" y="251.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">reads 2-bit codes straight from memory, never materializes f16 weights</text>
+<text x="550.0" y="267.88" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">-&gt; TernOCL kernel when it is a ternary u2 weight</text>
+<rect x="30" y="304" width="510" height="132" rx="6" fill="#f6dedb" stroke="#b8433a" stroke-width="1.5"/>
+<text x="285.0" y="332.92" font-size="13" font-weight="600" fill="#b8433a" text-anchor="middle">Trap 1</text>
+<text x="285.0" y="349.48" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">The zero point must be a Constant, not Convert(int Constant).</text>
+<text x="285.0" y="366.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">The ternary kernel reads the value directly when it builds.</text>
+<text x="285.0" y="382.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">A Convert has no value yet at that point, so the fusion</text>
+<text x="285.0" y="399.16" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">silently does not happen and the slow path runs.</text>
+<text x="285.0" y="415.72" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">(the same trap as an earlier gemma-4 MoE bug)</text>
+<rect x="560" y="304" width="510" height="132" rx="6" fill="#f6dedb" stroke="#b8433a" stroke-width="1.5"/>
+<text x="815.0" y="341.2" font-size="13" font-weight="600" fill="#b8433a" text-anchor="middle">Trap 2 = fix 4</text>
+<text x="815.0" y="357.76" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">The backend forced token_embd and output weights to 8-bit</text>
+<text x="815.0" y="374.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">for every model ('requantization'). On a ternary model that</text>
+<text x="815.0" y="390.88" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">inflates 2.13 bpw to 8 bpw AND moves the output projection</text>
+<text x="815.0" y="407.44" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">off the ternary path. Fix 4: never requantize PQ2_0.</text>
+</svg>

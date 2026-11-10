@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 470" width="1100" height="470" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="ah-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fb3"/></marker><marker id="ah-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a8c82"/></marker><marker id="ah-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c96a1b"/></marker><marker id="ah-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b8433a"/></marker><marker id="ah-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4fa0"/></marker><marker id="ah-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b7480"/></marker><marker id="ah-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a8a3a"/></marker><marker id="ah-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a07a12"/></marker><marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1b1f24"/></marker></defs>
+<rect width="1100" height="470" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24" text-anchor="start">Step 5 - the memory problem: fine while running, too big while loading</text>
+<text x="24" y="56" font-size="13" font-weight="400" fill="#6b7480" text-anchor="start">Measured system-wide on the iGPU (2026-11-04), before any fix. Peak = during compile_model.</text>
+<line x1="300.0" y1="104" x2="300.0" y2="330" stroke="#d9dde2" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="300.0" y="100" font-size="10" font-weight="400" fill="#6b7480" text-anchor="middle">0</text>
+<line x1="404.0" y1="104" x2="404.0" y2="330" stroke="#d9dde2" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="404.0" y="100" font-size="10" font-weight="400" fill="#6b7480" text-anchor="middle">8</text>
+<line x1="612.0" y1="104" x2="612.0" y2="330" stroke="#d9dde2" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="612.0" y="100" font-size="10" font-weight="400" fill="#6b7480" text-anchor="middle">24</text>
+<line x1="716.0" y1="104" x2="716.0" y2="330" stroke="#d9dde2" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="716.0" y="100" font-size="10" font-weight="400" fill="#6b7480" text-anchor="middle">32</text>
+<line x1="820.0" y1="104" x2="820.0" y2="330" stroke="#d9dde2" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="820.0" y="100" font-size="10" font-weight="400" fill="#6b7480" text-anchor="middle">40</text>
+<text x="290" y="130.4" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="end">ggml-openvino, default</text>
+<rect x="300" y="110" width="448.5" height="30" rx="3" fill="#b8433a" stroke="none" opacity="1.0"/>
+<text x="754.5" y="130.4" font-size="12" font-weight="600" fill="#1b1f24" text-anchor="start">34.5 GiB</text>
+<text x="290" y="174.4" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="end">+ SPILL_DIR + MEMORY_OPTIMIZE</text>
+<rect x="300" y="154" width="366.6" height="30" rx="3" fill="#b8433a" stroke="none" opacity="1.0"/>
+<text x="672.6" y="174.4" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">28.2 GiB   ggml's own memory knobs</text>
+<text x="290" y="218.4" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="end">OpenVINO GenAI</text>
+<rect x="300" y="198" width="271.7" height="30" rx="3" fill="#c96a1b" stroke="none" opacity="1.0"/>
+<text x="577.7" y="218.4" font-size="12" font-weight="600" fill="#1b1f24" text-anchor="start">20.9 GiB</text>
+<text x="290" y="262.4" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="end">ggml-vulkan</text>
+<rect x="300" y="242" width="100.1" height="30" rx="3" fill="#6b7480" stroke="none" opacity="1.0"/>
+<text x="406.1" y="262.4" font-size="12" font-weight="600" fill="#1b1f24" text-anchor="start">7.7 GiB</text>
+<text x="290" y="306.4" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="end">steady decode, ggml-openvino</text>
+<rect x="300" y="286" width="88.4" height="30" rx="3" fill="#3a8a3a" stroke="none" opacity="1.0"/>
+<text x="394.4" y="306.4" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">6.8 GiB   after load</text>
+<line x1="508.0" y1="96" x2="508.0" y2="330" stroke="#b8433a" stroke-width="2" stroke-dasharray="4 4"/>
+<text x="514.0" y="92" font-size="12" font-weight="600" fill="#b8433a" text-anchor="start">16 GB machine</text>
+<rect x="40" y="340" width="1020" height="64.4" rx="6" fill="#fbeadb" stroke="#c96a1b" stroke-width="1.5"/>
+<text x="50" y="359.96" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">The handoff's working theory: 'the GPU plugin needs ~20 GiB = 3x the weights to compile ANY model this size'.</text>
+<text x="50" y="376.52" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">That would have meant: only a pre-compiled cache can help. It turned out to be wrong - plain compile is 1x the weights,</text>
+<text x="50" y="393.08" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">and the extra came from three specific, fixable things (next diagrams).</text>
+</svg>

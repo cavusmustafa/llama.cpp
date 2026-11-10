@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 430" width="1000" height="430" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="ah-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fb3"/></marker><marker id="ah-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a8c82"/></marker><marker id="ah-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c96a1b"/></marker><marker id="ah-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b8433a"/></marker><marker id="ah-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4fa0"/></marker><marker id="ah-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b7480"/></marker><marker id="ah-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a8a3a"/></marker><marker id="ah-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a07a12"/></marker><marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1b1f24"/></marker></defs>
+<rect width="1000" height="430" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24" text-anchor="start">Why ternary: the same 26.9 B parameters at different precisions</text>
+<text x="24" y="56" font-size="13" font-weight="400" fill="#6b7480" text-anchor="start">Approximate weight size = parameters x bits per weight / 8. Only the ternary row was measured (6.70 GiB file).</text>
+<line x1="260.0" y1="104" x2="260.0" y2="318" stroke="#d9dde2" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="260.0" y="100" font-size="10" font-weight="400" fill="#6b7480" text-anchor="middle">0</text>
+<line x1="580.0" y1="104" x2="580.0" y2="318" stroke="#d9dde2" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="580.0" y="100" font-size="10" font-weight="400" fill="#6b7480" text-anchor="middle">32</text>
+<line x1="740.0" y1="104" x2="740.0" y2="318" stroke="#d9dde2" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="740.0" y="100" font-size="10" font-weight="400" fill="#6b7480" text-anchor="middle">48</text>
+<text x="250" y="133.12" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="end">fp16 (16 bpw)</text>
+<rect x="260" y="110" width="538.0" height="34" rx="3" fill="#6b7480" stroke="none" opacity="1.0"/>
+<text x="804.0" y="133.12" font-size="12" font-weight="600" fill="#1b1f24" text-anchor="start">53.8 GB</text>
+<text x="250" y="185.12" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="end">int8 (~8.5 bpw)</text>
+<rect x="260" y="162" width="286.0" height="34" rx="3" fill="#6b7480" stroke="none" opacity="1.0"/>
+<text x="552.0" y="185.12" font-size="12" font-weight="600" fill="#1b1f24" text-anchor="start">28.6 GB</text>
+<text x="250" y="237.12" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="end">int4 (~4.5 bpw)</text>
+<rect x="260" y="214" width="151.0" height="34" rx="3" fill="#2f6fb3" stroke="none" opacity="1.0"/>
+<text x="417.0" y="237.12" font-size="12" font-weight="600" fill="#1b1f24" text-anchor="start">15.1 GB</text>
+<text x="250" y="289.12" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="end">ternary PQ2_0 (2.13 bpw)</text>
+<rect x="260" y="266" width="72.0" height="34" rx="3" fill="#2a8c82" stroke="none" opacity="1.0"/>
+<text x="338.0" y="289.12" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">7.2 GB   measured file: 7.2 GB</text>
+<line x1="420.0" y1="96" x2="420.0" y2="318" stroke="#b8433a" stroke-width="2" stroke-dasharray="4 4"/>
+<text x="426.0" y="100" font-size="12" font-weight="600" fill="#b8433a" text-anchor="start">16 GB = all of a laptop's RAM</text>
+<rect x="30" y="330" width="940" height="47.599999999999994" rx="6" fill="#fbf1d3" stroke="#a07a12" stroke-width="1.5"/>
+<text x="40" y="349.84000000000003" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">A 27 B model normally needs a workstation. At ~2 bits per weight it fits next to the OS on a 16 GB laptop - if</text>
+<text x="40" y="366.40000000000003" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">the runtime does not need extra copies of the weights while loading. Step 5 of this report is about exactly that.</text>
+</svg>

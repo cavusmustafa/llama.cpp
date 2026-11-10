@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 500" width="1100" height="500" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="ah-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fb3"/></marker><marker id="ah-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a8c82"/></marker><marker id="ah-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c96a1b"/></marker><marker id="ah-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b8433a"/></marker><marker id="ah-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4fa0"/></marker><marker id="ah-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b7480"/></marker><marker id="ah-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a8a3a"/></marker><marker id="ah-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a07a12"/></marker><marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1b1f24"/></marker></defs>
+<rect width="1100" height="500" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24" text-anchor="start">Fix 3 - a reshape that baked in the token count</text>
+<text x="24" y="56" font-size="13" font-weight="400" fill="#6b7480" text-anchor="start">The Hadamard rotation reshapes [T, 5120] -&gt; [T*5, 1024]. The token axis is split, not kept.</text>
+<rect x="40" y="90" width="300" height="56" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="190.0" y="113.71000000000001" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="middle">input  [1, 1, T, 5120]</text>
+<text x="190.0" y="131.65" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="middle">T is dynamic</text>
+<rect x="40" y="180" width="300" height="56" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="190.0" y="212.68" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="middle">output [1, 1, T*5, 1024]</text>
+<line x1="190" y1="146" x2="190" y2="180" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="190.0,180.0 194.5,171.0 185.5,171.0" fill="#1b1f24"/>
+<text x="200" y="168" font-size="11" font-weight="400" fill="#6b7480" text-anchor="start">RESHAPE</text>
+<text x="380" y="104" font-size="13" font-weight="600" fill="#1b1f24" text-anchor="start">Old rule: 'the output axis with the same extent as the input's dynamic axis gets -1'</text>
+<text x="380" y="128.0" font-size="12" font-weight="400" fill="#b8433a" text-anchor="start">no output axis has extent T (it has T*5) -&gt; rule finds nothing</text>
+<text x="380" y="144.2" font-size="12" font-weight="400" fill="#b8433a" text-anchor="start">-&gt; whole target shape written as constants, from the first graph captured:</text>
+<text x="380" y="160.4" font-size="12" font-weight="400" fill="#b8433a" text-anchor="start">    warm-up with T = 2 -&gt; target [1, 1, 10, 1024]</text>
+<text x="380" y="176.60000000000002" font-size="12" font-weight="400" fill="#b8433a" text-anchor="start">-&gt; replay with a 42-token prompt: [1,1,42,5120] cannot become [1,1,10,1024]</text>
+<rect x="380" y="230" width="680" height="40" rx="6" fill="#f6dedb" stroke="#b8433a" stroke-width="1.5"/>
+<text x="720.0" y="254.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">error: Requested output shape [1,1,10,1024] is incompatible with input shape [1,1,42,5120]</text>
+<text x="380" y="312" font-size="13" font-weight="600" fill="#1b1f24" text-anchor="start">New fallback rule (only when the old one fails): 'the output axis that spans the same elements'</text>
+<text x="380" y="336.0" font-size="12" font-weight="400" fill="#3a8a3a" text-anchor="start">everything above it is static, and the element count up to and including it matches</text>
+<text x="380" y="352.2" font-size="12" font-weight="400" fill="#3a8a3a" text-anchor="start">-&gt; axis 2 is the dynamic one -&gt; target [1, 1, -1, 1024] -&gt; works for every T</text>
+<rect x="380" y="382" width="680" height="40" rx="6" fill="#e2f0e2" stroke="#3a8a3a" stroke-width="1.5"/>
+<text x="720.0" y="406.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">target [1, 1, -1, 1024]   (computed at run time)</text>
+<rect x="40" y="270" width="300" height="98.0" rx="6" fill="#fbf1d3" stroke="#a07a12" stroke-width="1.5"/>
+<text x="50" y="290.2" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">Nothing about this is ternary-</text>
+<text x="50" y="306.76" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">specific: any reshape that splits or</text>
+<text x="50" y="323.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">merges the dynamic axis had this</text>
+<text x="50" y="339.88" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">latent bug. It is the one fix that</text>
+<text x="50" y="356.44" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">could go upstream on its own.</text>
+</svg>

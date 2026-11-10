@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 450" width="1100" height="450" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="ah-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fb3"/></marker><marker id="ah-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a8c82"/></marker><marker id="ah-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c96a1b"/></marker><marker id="ah-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b8433a"/></marker><marker id="ah-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4fa0"/></marker><marker id="ah-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b7480"/></marker><marker id="ah-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a8a3a"/></marker><marker id="ah-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a07a12"/></marker><marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1b1f24"/></marker></defs>
+<rect width="1100" height="450" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24" text-anchor="start">Step 5 result - peak memory, fix by fix</text>
+<text x="24" y="56" font-size="13" font-weight="400" fill="#6b7480" text-anchor="start">Process peak (CPU heap + GPU buffers). Same model, Arc B390 iGPU.</text>
+<text x="40" y="96" font-size="14" font-weight="600" fill="#1b1f24" text-anchor="start">Pure OpenVINO compile of the ggml graph (TernOCL on)</text>
+<text x="300" y="128.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="end">before</text>
+<rect x="310" y="112" width="306.9" height="24" rx="3" fill="#b8433a" stroke="none" opacity="1.0"/>
+<text x="622.9" y="128.32" font-size="12" font-weight="600" fill="#1b1f24" text-anchor="start">27.9 GiB</text>
+<text x="300" y="162.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="end">+ cause 1: u2 GatherCompressed</text>
+<rect x="310" y="146" width="203.5" height="24" rx="3" fill="#c96a1b" stroke="none" opacity="1.0"/>
+<text x="519.5" y="162.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">18.5 GiB   -9.4</text>
+<text x="300" y="196.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="end">+ cause 2: chunked const-prop</text>
+<rect x="310" y="180" width="147.4" height="24" rx="3" fill="#c96a1b" stroke="none" opacity="1.0"/>
+<text x="463.4" y="196.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">13.4 GiB   -5.1</text>
+<text x="300" y="230.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="end">+ cause 3: evictable merged weights</text>
+<rect x="310" y="214" width="100.1" height="24" rx="3" fill="#3a8a3a" stroke="none" opacity="1.0"/>
+<text x="416.1" y="230.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">9.1 GiB   -4.3</text>
+<text x="40" y="270" font-size="14" font-weight="600" fill="#1b1f24" text-anchor="start">llama-cli end to end, primes prompt, GGML_OPENVINO_MEMORY_OPTIMIZE=1 + SPILL_DIR</text>
+<text x="300" y="302.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="end">before</text>
+<rect x="310" y="286" width="310.2" height="24" rx="3" fill="#b8433a" stroke="none" opacity="1.0"/>
+<text x="626.2" y="302.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">28.2 GiB   ~80 s run</text>
+<text x="300" y="336.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="end">after (all three)</text>
+<rect x="310" y="320" width="110.0" height="24" rx="3" fill="#3a8a3a" stroke="none" opacity="1.0"/>
+<text x="426.0" y="336.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">10.0 GiB   30 s run, same output, 13.2 t/s</text>
+<rect x="760" y="96" width="300" height="150" rx="6" fill="#f1f3f5" stroke="#6b7480" stroke-width="1.5"/>
+<text x="910.0" y="133.92" font-size="13" font-weight="600" fill="#6b7480" text-anchor="middle">Also</text>
+<text x="910.0" y="150.48" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">GenAI's own IR: 18.0 -&gt; 8.8 GiB</text>
+<text x="910.0" y="167.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">TernOCL off: 17.6 -&gt; 8.4 GiB</text>
+<text x="910.0" y="183.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">without ggml's memory knobs:</text>
+<text x="910.0" y="200.15999999999997" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">33.6 -&gt; 16.5 GiB (ggml keeps</text>
+<text x="910.0" y="216.71999999999997" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">a 7.3 GiB host weight copy)</text>
+</svg>

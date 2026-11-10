@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 470" width="1100" height="470" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="ah-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fb3"/></marker><marker id="ah-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a8c82"/></marker><marker id="ah-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c96a1b"/></marker><marker id="ah-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b8433a"/></marker><marker id="ah-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4fa0"/></marker><marker id="ah-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b7480"/></marker><marker id="ah-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a8a3a"/></marker><marker id="ah-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a07a12"/></marker><marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1b1f24"/></marker></defs>
+<rect width="1100" height="470" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24" text-anchor="start">Step 3c - the biggest single item: shipping the recurrent state back and forth</text>
+<text x="24" y="56" font-size="13" font-weight="400" fill="#6b7480" text-anchor="start">Three op types appeared exactly 96 times per token = 48 GDN layers x (state in + state out).</text>
+<rect x="40" y="100" width="150" height="64" rx="6" fill="#f1f3f5" stroke="#6b7480" stroke-width="1.5"/>
+<text x="115.0" y="128.04" font-size="13" font-weight="600" fill="#6b7480" text-anchor="middle">ggml buffer</text>
+<text x="115.0" y="144.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">f32 [B,H,v,k]</text>
+<rect x="220" y="100" width="150" height="64" rx="6" fill="#f6dedb" stroke="#b8433a" stroke-width="1.5"/>
+<text x="295.0" y="128.04" font-size="13" font-weight="600" fill="#b8433a" text-anchor="middle">Transpose</text>
+<text x="295.0" y="144.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">{0,1,3,2}</text>
+<rect x="400" y="100" width="150" height="64" rx="6" fill="#e4f1ef" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="475.0" y="128.04" font-size="13" font-weight="600" fill="#2a8c82" text-anchor="middle">GatedDeltaNet</text>
+<text x="475.0" y="144.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">wants [B,H,k,v]</text>
+<rect x="580" y="100" width="150" height="64" rx="6" fill="#f6dedb" stroke="#b8433a" stroke-width="1.5"/>
+<text x="655.0" y="128.04" font-size="13" font-weight="600" fill="#b8433a" text-anchor="middle">Transpose</text>
+<text x="655.0" y="144.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">back</text>
+<rect x="760" y="100" width="150" height="64" rx="6" fill="#fbeadb" stroke="#c96a1b" stroke-width="1.5"/>
+<text x="835.0" y="128.04" font-size="13" font-weight="600" fill="#c96a1b" text-anchor="middle">Convert</text>
+<text x="835.0" y="144.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">-&gt; f32</text>
+<rect x="920" y="100" width="150" height="64" rx="6" fill="#fbeadb" stroke="#c96a1b" stroke-width="1.5"/>
+<text x="995.0" y="128.04" font-size="13" font-weight="600" fill="#c96a1b" text-anchor="middle">Result</text>
+<text x="995.0" y="144.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">write back</text>
+<line x1="190" y1="132" x2="220" y2="132" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="220.0,132.0 211.0,127.5 211.0,136.5" fill="#1b1f24"/>
+<line x1="370" y1="132" x2="400" y2="132" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="400.0,132.0 391.0,127.5 391.0,136.5" fill="#1b1f24"/>
+<line x1="550" y1="132" x2="580" y2="132" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="580.0,132.0 571.0,127.5 571.0,136.5" fill="#1b1f24"/>
+<line x1="730" y1="132" x2="760" y2="132" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="760.0,132.0 751.0,127.5 751.0,136.5" fill="#1b1f24"/>
+<line x1="910" y1="132" x2="920" y2="132" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="920.0,132.0 911.0,127.5 911.0,136.5" fill="#1b1f24"/>
+<path d="M 995 164 C 995 230, 115 230, 115 168" stroke="#6b7480" stroke-width="1.6" fill="none" stroke-dasharray="5 4"/>
+<polygon points="115.0,168.0 110.5,177.0 119.5,177.0" fill="#6b7480"/>
+<text x="555" y="226" font-size="12" font-weight="400" fill="#6b7480" text-anchor="middle">every token, every GDN layer: 3.1 MB per layer, ~151 MB per token</text>
+<rect x="40" y="256" width="500" height="116" rx="6" fill="#e2f0e2" stroke="#3a8a3a" stroke-width="1.5"/>
+<text x="290.0" y="285.2" font-size="13" font-weight="600" fill="#3a8a3a" text-anchor="middle">Fixed: keep the state in the op's layout</text>
+<text x="290.0" y="301.76" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">the buffer is only read and written by this op pair,</text>
+<text x="290.0" y="318.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">so it can simply hold the op's own layout:</text>
+<text x="290.0" y="334.88" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">96 transposes -&gt; 0, 2718 -&gt; 2622 ops per token</text>
+<text x="290.0" y="351.44" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">decode 13.05 -&gt; 13.45 t/s (+3.0%), output identical</text>
+<rect x="560" y="256" width="500" height="116" rx="6" fill="#fbeadb" stroke="#c96a1b" stroke-width="1.5"/>
+<text x="810.0" y="285.2" font-size="13" font-weight="600" fill="#c96a1b" text-anchor="middle">Not fixed yet: the dtype + writeback half</text>
+<text x="810.0" y="301.76" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">ggml owns the state in f32, the GPU computes in f16:</text>
+<text x="810.0" y="318.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">48 Convert + 96 Result = ~3.4 ms per token</text>
+<text x="810.0" y="334.88" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">needs a device-resident state (OpenVINO Variable),</text>
+<text x="810.0" y="351.44" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">worth ~+4.7% -&gt; ~14.0 t/s. Hard part: llama.cpp clears/copies state slots</text>
+<rect x="40" y="392" width="1020" height="47.599999999999994" rx="6" fill="#fbf1d3" stroke="#a07a12" stroke-width="1.5"/>
+<text x="50" y="411.84000000000003" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">Guarded on a square state (128 x 128 here): otherwise skipping the permute would change the buffer shape ggml allocated.</text>
+<text x="50" y="428.40000000000003" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">OpenVINO's own GGUF frontend made the identical change upstream (630516e048) - a good sign the idea is right.</text>
+</svg>

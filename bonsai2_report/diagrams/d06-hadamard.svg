@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 600" width="1100" height="600" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="ah-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fb3"/></marker><marker id="ah-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a8c82"/></marker><marker id="ah-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c96a1b"/></marker><marker id="ah-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b8433a"/></marker><marker id="ah-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4fa0"/></marker><marker id="ah-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b7480"/></marker><marker id="ah-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a8a3a"/></marker><marker id="ah-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a07a12"/></marker><marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1b1f24"/></marker></defs>
+<rect width="1100" height="600" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24" text-anchor="start">The twist: the weights live in a rotated basis (Hadamard rotation)</text>
+<text x="24" y="56" font-size="13" font-weight="400" fill="#6b7480" text-anchor="start">Why the model needs an extra transform in front of every ternary matmul, and why it must not be skipped.</text>
+<text x="40" y="88" font-size="13" font-weight="600" fill="#1b1f24" text-anchor="start">Before: one group of weights with an outlier</text>
+<line x1="40" y1="160" x2="460" y2="160" stroke="#d9dde2" stroke-width="1"/>
+<line x1="48" y1="160" x2="48" y2="160.0" stroke="#b8433a" stroke-width="5"/>
+<line x1="61" y1="160" x2="61" y2="156.03334075819012" stroke="#b8433a" stroke-width="5"/>
+<line x1="74" y1="160" x2="74" y2="161.02216440810733" stroke="#b8433a" stroke-width="5"/>
+<line x1="87" y1="160" x2="87" y2="163.70325872931093" stroke="#b8433a" stroke-width="5"/>
+<line x1="100" y1="160" x2="100" y2="158.02354659544557" stroke="#b8433a" stroke-width="5"/>
+<line x1="113" y1="160" x2="113" y2="156.80605154950604" stroke="#b8433a" stroke-width="5"/>
+<line x1="126" y1="160" x2="126" y2="162.79949875037417" stroke="#b8433a" stroke-width="5"/>
+<line x1="139" y1="160" x2="139" y2="162.47254844894815" stroke="#b8433a" stroke-width="5"/>
+<line x1="152" y1="160" x2="152" y2="156.563352740574" stroke="#b8433a" stroke-width="5"/>
+<line x1="165" y1="160" x2="165" y2="158.41303770747754" stroke="#b8433a" stroke-width="5"/>
+<line x1="178" y1="160" x2="178" y2="163.84558996751824" stroke="#b8433a" stroke-width="5"/>
+<line x1="191" y1="160" x2="191" y2="110.0" stroke="#b8433a" stroke-width="5"/>
+<line x1="204" y1="160" x2="204" y2="156.0008283994293" stroke="#b8433a" stroke-width="5"/>
+<line x1="217" y1="160" x2="217" y2="160.4345463816963" stroke="#b8433a" stroke-width="5"/>
+<line x1="230" y1="160" x2="230" y2="163.88719378297546" stroke="#b8433a" stroke-width="5"/>
+<line x1="243" y1="160" x2="243" y2="158.56376658391133" stroke="#b8433a" stroke-width="5"/>
+<line x1="256" y1="160" x2="256" y2="156.48290775339711" stroke="#b8433a" stroke-width="5"/>
+<line x1="269" y1="160" x2="269" y2="162.3425493598972" stroke="#b8433a" stroke-width="5"/>
+<line x1="282" y1="160" x2="282" y2="162.91344307132638" stroke="#b8433a" stroke-width="5"/>
+<line x1="295" y1="160" x2="295" y2="156.90668844173513" stroke="#b8433a" stroke-width="5"/>
+<line x1="308" y1="160" x2="308" y2="157.8836692555199" stroke="#b8433a" stroke-width="5"/>
+<line x1="321" y1="160" x2="321" y2="163.6386666873341" stroke="#b8433a" stroke-width="5"/>
+<line x1="334" y1="160" x2="334" y2="161.17868640600102" stroke="#b8433a" stroke-width="5"/>
+<line x1="347" y1="160" x2="347" y2="156.05759880483745" stroke="#b8433a" stroke-width="5"/>
+<line x1="360" y1="160" x2="360" y2="159.83722697060054" stroke="#b8433a" stroke-width="5"/>
+<line x1="373" y1="160" x2="373" y2="163.98434601247837" stroke="#b8433a" stroke-width="5"/>
+<line x1="386" y1="160" x2="386" y2="159.13605093524714" stroke="#b8433a" stroke-width="5"/>
+<line x1="399" y1="160" x2="399" y2="156.238284148212" stroke="#b8433a" stroke-width="5"/>
+<line x1="412" y1="160" x2="412" y2="161.83330181796705" stroke="#b8433a" stroke-width="5"/>
+<line x1="425" y1="160" x2="425" y2="163.28929416053396" stroke="#b8433a" stroke-width="5"/>
+<line x1="438" y1="160" x2="438" y2="157.3190832966265" stroke="#b8433a" stroke-width="5"/>
+<line x1="451" y1="160" x2="451" y2="157.4015485532552" stroke="#b8433a" stroke-width="5"/>
+<text x="600" y="88" font-size="13" font-weight="600" fill="#1b1f24" text-anchor="start">After rotation: the outlier is spread over all 1024 inputs</text>
+<line x1="600" y1="160" x2="1020" y2="160" stroke="#d9dde2" stroke-width="1"/>
+<line x1="608" y1="160" x2="608" y2="146.61005307442645" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="621" y1="160" x2="621" y2="151.02965753091834" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="634" y1="160" x2="634" y2="177.33776741420075" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="647" y1="160" x2="647" y2="148.79296903338184" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="660" y1="160" x2="660" y2="169.23960304386222" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="673" y1="160" x2="673" y2="170.44400506216152" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="686" y1="160" x2="686" y2="139.55802624548107" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="699" y1="160" x2="699" y2="168.6218681924331" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="712" y1="160" x2="712" y2="156.07584639071953" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="725" y1="160" x2="725" y2="148.77239936782428" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="738" y1="160" x2="738" y2="182.02208679906283" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="751" y1="160" x2="751" y2="153.61634287602618" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="764" y1="160" x2="764" y2="157.9362368154735" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="777" y1="160" x2="777" y2="171.63647660961885" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="790" y1="160" x2="790" y2="138.2172499958161" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="803" y1="160" x2="803" y2="164.51859339963318" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="816" y1="160" x2="816" y2="168.09958926829728" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="829" y1="160" x2="829" y2="148.03443370610054" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="842" y1="160" x2="842" y2="179.66705245174848" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="855" y1="160" x2="855" y2="157.10926819732177" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="868" y1="160" x2="868" y2="146.4749762315471" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="881" y1="160" x2="881" y2="172.40940347886152" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="894" y1="160" x2="894" y2="144.1263702518978" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="907" y1="160" x2="907" y2="161.25627209624855" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="920" y1="160" x2="920" y2="177.75436737599085" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="933" y1="160" x2="933" y2="146.9912518589882" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="946" y1="160" x2="946" y2="170.82763463631719" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="959" y1="160" x2="959" y2="160.65692264266542" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="972" y1="160" x2="972" y2="139.63143587260728" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="985" y1="160" x2="985" y2="173.63550853567872" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="998" y1="160" x2="998" y2="154.88903162297825" stroke="#3a8a3a" stroke-width="5"/>
+<line x1="1011" y1="160" x2="1011" y2="156.93753760230206" stroke="#3a8a3a" stroke-width="5"/>
+<text x="40" y="200.0" font-size="12" font-weight="400" fill="#6b7480" text-anchor="start">Ternary has 3 levels. The scale is set by the outlier,</text>
+<text x="40" y="216.2" font-size="12" font-weight="400" fill="#6b7480" text-anchor="start">so every small weight rounds to 0: information lost.</text>
+<text x="600" y="200.0" font-size="12" font-weight="400" fill="#6b7480" text-anchor="start">Values are now roughly Gaussian and similar in size,</text>
+<text x="600" y="216.2" font-size="12" font-weight="400" fill="#6b7480" text-anchor="start">so -1/0/+1 x scale keeps most of the information.</text>
+<line x1="470" y1="140" x2="590" y2="140" stroke="#3a8a3a" stroke-width="1.6"/>
+<polygon points="590.0,140.0 581.0,135.5 581.0,144.5" fill="#3a8a3a"/>
+<text x="530.0" y="134.0" font-size="11" font-weight="400" fill="#3a8a3a" text-anchor="middle">x H (offline)</text>
+<rect x="40" y="260" width="1020" height="96" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="550.0" y="284.06" font-size="15" font-weight="600" fill="#2f6fb3" text-anchor="middle">The math (H = 1024 x 1024 normalized Walsh-Hadamard matrix, entries +-1/32, plus a fixed sign flip)</text>
+<text x="550.0" y="303.38" font-size="14" font-weight="400" fill="#1b1f24" text-anchor="middle">W_rot = W . H         done once, offline, when the model was quantized</text>
+<text x="550.0" y="322.7" font-size="14" font-weight="400" fill="#1b1f24" text-anchor="middle">x_rot = H . x          must happen at run time, on every forward pass</text>
+<text x="550.0" y="342.02" font-size="14" font-weight="400" fill="#1b1f24" text-anchor="middle">W_rot . x_rot = W . x  because H is orthogonal - the result is unchanged</text>
+<text x="40" y="392" font-size="13" font-weight="600" fill="#1b1f24" text-anchor="start">In the ggml graph, in front of every ternary matmul:</text>
+<rect x="40" y="406" width="150" height="44" rx="6" fill="#f1f3f5" stroke="#6b7480" stroke-width="1.5"/>
+<text x="115.0" y="432.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">x</text>
+<rect x="212" y="406" width="150" height="44" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="287.0" y="432.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">MUL by signs</text>
+<line x1="190" y1="428" x2="212" y2="428" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="212.0,428.0 203.0,423.5 203.0,432.5" fill="#1b1f24"/>
+<rect x="384" y="406" width="150" height="44" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="459.0" y="432.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">RESHAPE</text>
+<line x1="362" y1="428" x2="384" y2="428" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="384.0,428.0 375.0,423.5 375.0,432.5" fill="#1b1f24"/>
+<rect x="556" y="406" width="150" height="44" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="631.0" y="432.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">MUL_MAT by H</text>
+<line x1="534" y1="428" x2="556" y2="428" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="556.0,428.0 547.0,423.5 547.0,432.5" fill="#1b1f24"/>
+<rect x="728" y="406" width="150" height="44" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="803.0" y="432.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">RESHAPE back</text>
+<line x1="706" y1="428" x2="728" y2="428" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="728.0,428.0 719.0,423.5 719.0,432.5" fill="#1b1f24"/>
+<rect x="900" y="406" width="150" height="44" rx="6" fill="#e4f1ef" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="975.0" y="432.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">MUL_MAT by W</text>
+<line x1="878" y1="428" x2="900" y2="428" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="900.0,428.0 891.0,423.5 891.0,432.5" fill="#1b1f24"/>
+<text x="380" y="470" font-size="11" font-weight="400" fill="#6b7480" text-anchor="middle">[T, K] -&gt; [T*K/1024, 1024]</text>
+<rect x="40" y="490" width="1020" height="64.4" rx="6" fill="#fbf1d3" stroke="#a07a12" stroke-width="1.5"/>
+<text x="50" y="509.96000000000004" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">Skip the activation rotation and the output is garbage, not 'slightly worse'. So the rotation is part of the model.</text>
+<text x="50" y="526.52" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">Ordinary ops (MUL, RESHAPE, MUL_MAT) - any backend can run it, but ~400 extra 1024x1024 matmuls per token is slow.</text>
+<text x="50" y="543.08" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">OpenVINO's GPU plugin (PR #38460) recognises the chain and folds it into the ternary matmul kernel: FuseHadamardIntoFC.</text>
+</svg>

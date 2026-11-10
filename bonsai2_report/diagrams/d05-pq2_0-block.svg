@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 560" width="1000" height="560" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="ah-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fb3"/></marker><marker id="ah-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a8c82"/></marker><marker id="ah-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c96a1b"/></marker><marker id="ah-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b8433a"/></marker><marker id="ah-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4fa0"/></marker><marker id="ah-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b7480"/></marker><marker id="ah-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a8a3a"/></marker><marker id="ah-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a07a12"/></marker><marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1b1f24"/></marker></defs>
+<rect width="1000" height="560" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24" text-anchor="start">PQ2_0 - how one block of 128 ternary weights is stored</text>
+<text x="24" y="56" font-size="13" font-weight="400" fill="#6b7480" text-anchor="start">'Prism Q2_0', a ggml type that exists only in the PrismML fork of llama.cpp (type id 142).</text>
+<text x="24" y="96" font-size="14" font-weight="600" fill="#1b1f24" text-anchor="start">One block = 128 weights = 34 bytes</text>
+<rect x="24" y="108" width="90" height="50" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="69.0" y="129.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">d</text>
+<text x="69.0" y="145.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">f16 scale</text>
+<rect x="118" y="108" width="640" height="50" rx="6" fill="#e4f1ef" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="438.0" y="129.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">qs[32]  -  32 bytes</text>
+<text x="438.0" y="145.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">128 codes x 2 bits, 4 codes per byte</text>
+<text x="772" y="126.0" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="start">2 + 32 = 34 bytes</text>
+<text x="772" y="143.55" font-size="13" font-weight="600" fill="#1b1f24" text-anchor="start">= 2.125 bits per weight</text>
+<text x="24" y="200" font-size="14" font-weight="600" fill="#1b1f24" text-anchor="start">Inside one byte - code j sits at bits [2j, 2j+1], lowest bits first</text>
+<rect x="24" y="212" width="110" height="54" rx="0" fill="#f1f3f5" stroke="#6b7480" stroke-width="1.5"/>
+<text x="79.0" y="235.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">bits 7..6</text>
+<text x="79.0" y="251.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">code 3</text>
+<rect x="134" y="212" width="110" height="54" rx="0" fill="#f1f3f5" stroke="#6b7480" stroke-width="1.5"/>
+<text x="189.0" y="235.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">bits 5..4</text>
+<text x="189.0" y="251.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">code 2</text>
+<rect x="244" y="212" width="110" height="54" rx="0" fill="#f1f3f5" stroke="#6b7480" stroke-width="1.5"/>
+<text x="299.0" y="235.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">bits 3..2</text>
+<text x="299.0" y="251.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">code 1</text>
+<rect x="354" y="212" width="110" height="54" rx="0" fill="#f1f3f5" stroke="#6b7480" stroke-width="1.5"/>
+<text x="409.0" y="235.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">bits 1..0</text>
+<text x="409.0" y="251.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">code 0</text>
+<text x="500" y="234" font-size="12" font-weight="400" fill="#6b7480" text-anchor="start">the same rule OpenVINO uses for its 'u2' type</text>
+<text x="500" y="252" font-size="12" font-weight="400" fill="#6b7480" text-anchor="start">-&gt; converting PQ2_0 to OpenVINO is a plain memcpy (section 5)</text>
+<text x="24" y="310" font-size="14" font-weight="600" fill="#1b1f24" text-anchor="start">From code to weight:   weight = (code - 1) x d</text>
+<rect x="24" y="326" width="160" height="56" rx="6" fill="#f6dedb" stroke="#b8433a" stroke-width="1.5"/>
+<text x="104.0" y="349.71" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="middle">code 0</text>
+<text x="104.0" y="367.65" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="middle">-&gt; -d</text>
+<rect x="199" y="326" width="160" height="56" rx="6" fill="#f1f3f5" stroke="#6b7480" stroke-width="1.5"/>
+<text x="279.0" y="349.71" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="middle">code 1</text>
+<text x="279.0" y="367.65" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="middle">-&gt; 0</text>
+<rect x="374" y="326" width="160" height="56" rx="6" fill="#e2f0e2" stroke="#3a8a3a" stroke-width="1.5"/>
+<text x="454.0" y="349.71" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="middle">code 2</text>
+<text x="454.0" y="367.65" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="middle">-&gt; +d</text>
+<rect x="549" y="326" width="160" height="56" rx="6" fill="#fbf1d3" stroke="#a07a12" stroke-width="1.5"/>
+<text x="629.0" y="349.71" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="middle">code 3</text>
+<text x="629.0" y="367.65" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="middle">-&gt; never used</text>
+<rect x="24" y="410" width="950" height="64.4" rx="6" fill="#fbf1d3" stroke="#a07a12" stroke-width="1.5"/>
+<text x="34" y="429.96" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">The weights really are -1, 0 or +1 (times one scale per 128 weights) - the model was trained/quantized that way.</text>
+<text x="34" y="446.52" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">log2(3) = 1.58 bits would be the theoretical minimum. Wasting the 4th code buys unpacking with a shift and a mask,</text>
+<text x="34" y="463.08" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">no division. The sibling type PTQ1_0 packs 5 trits per byte (1.75 bpw) at the cost of divisions to unpack.</text>
+</svg>

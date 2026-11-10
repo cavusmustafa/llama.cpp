@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 460" width="1100" height="460" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="ah-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fb3"/></marker><marker id="ah-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a8c82"/></marker><marker id="ah-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c96a1b"/></marker><marker id="ah-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b8433a"/></marker><marker id="ah-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4fa0"/></marker><marker id="ah-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b7480"/></marker><marker id="ah-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a8a3a"/></marker><marker id="ah-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a07a12"/></marker><marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1b1f24"/></marker></defs>
+<rect width="1100" height="460" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24" text-anchor="start">Step 1 result (2026-10-08): it runs, and the ternary kernels are not optional</text>
+<text x="24" y="56" font-size="13" font-weight="400" fill="#6b7480" text-anchor="start">Arc B390 iGPU, llama-bench -r 3 -ngl 99, tokens/second. OpenVINO PR #38460 build 5c6d4692ee.</text>
+<text x="40" y="96" font-size="14" font-weight="600" fill="#1b1f24" text-anchor="start">Prompt processing, 512 tokens (pp512)</text>
+<text x="240" y="128.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="end">ggml-openvino + TernOCL</text>
+<rect x="250" y="112" width="228.54" height="24" rx="3" fill="#2a8c82" stroke="none" opacity="1.0"/>
+<text x="484.53999999999996" y="128.32" font-size="12" font-weight="600" fill="#1b1f24" text-anchor="start">527</text>
+<text x="240" y="162.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="end">ggml-openvino, int8 prefill</text>
+<rect x="250" y="146" width="247.47666666666666" height="24" rx="3" fill="#6b4fa0" stroke="none" opacity="1.0"/>
+<text x="503.4766666666667" y="162.32" font-size="12" font-weight="600" fill="#1b1f24" text-anchor="start">571</text>
+<text x="240" y="196.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="end">ggml-vulkan</text>
+<rect x="250" y="180" width="71.67333333333333" height="24" rx="3" fill="#6b7480" stroke="none" opacity="1.0"/>
+<text x="327.67333333333335" y="196.32" font-size="12" font-weight="600" fill="#1b1f24" text-anchor="start">165</text>
+<text x="600" y="96" font-size="14" font-weight="600" fill="#1b1f24" text-anchor="start">Generation (tg32)</text>
+<text x="780" y="128.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="end">ggml-openvino + TernOCL</text>
+<rect x="790" y="112" width="175.0" height="24" rx="3" fill="#2a8c82" stroke="none" opacity="1.0"/>
+<text x="971.0" y="128.32" font-size="12" font-weight="600" fill="#1b1f24" text-anchor="start">12.25</text>
+<text x="780" y="162.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="end">ggml-vulkan</text>
+<rect x="790" y="146" width="176.0" height="24" rx="3" fill="#6b7480" stroke="none" opacity="1.0"/>
+<text x="972.0" y="162.32" font-size="12" font-weight="600" fill="#1b1f24" text-anchor="start">12.32</text>
+<text x="780" y="196.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="end">TernOCL disabled</text>
+<rect x="790" y="180" width="17.714285714285715" height="24" rx="3" fill="#b8433a" stroke="none" opacity="1.0"/>
+<text x="813.7142857142857" y="196.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">1.24   9.9x slower</text>
+<rect x="40" y="250" width="500" height="92" rx="6" fill="#e4f1ef" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="290.0" y="275.48" font-size="13" font-weight="600" fill="#2a8c82" text-anchor="middle">Prefill: 3.2x Vulkan</text>
+<text x="290.0" y="292.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">Vulkan is flat from 128 to 512 tokens (161 -&gt; 165): a per-token kernel.</text>
+<text x="290.0" y="308.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">OpenVINO scales (234 -&gt; 527): a tiled GEMM that reuses weights</text>
+<text x="290.0" y="325.16" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">across tokens. 3.2x faster at 512 tokens.</text>
+<rect x="600" y="250" width="460" height="92" rx="6" fill="#f6dedb" stroke="#b8433a" stroke-width="1.5"/>
+<text x="830.0" y="275.48" font-size="13" font-weight="600" fill="#b8433a" text-anchor="middle">TernOCL is required</text>
+<text x="830.0" y="292.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">Without the PR's kernels the u2 weights take the generic</text>
+<text x="830.0" y="308.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">decompression path: 1.4 t/s prefill (167x slower).</text>
+<text x="830.0" y="325.16" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">The kernels are the difference between usable and not.</text>
+<rect x="40" y="362" width="1020" height="47.599999999999994" rx="6" fill="#fbeadb" stroke="#c96a1b" stroke-width="1.5"/>
+<text x="50" y="381.84000000000003" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">What we believed then (later shown WRONG in step 3): 'decode is a tie, pinned by an ~80 GB/s bandwidth wall'.</text>
+<text x="50" y="398.40000000000003" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">This machine's peak is 153.6 GB/s, and native OpenVINO decodes the same weights 22% faster. Measure the ceiling, don't assume it.</text>
+</svg>

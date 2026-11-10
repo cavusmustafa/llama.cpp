@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 520" width="1100" height="520" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="ah-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fb3"/></marker><marker id="ah-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a8c82"/></marker><marker id="ah-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c96a1b"/></marker><marker id="ah-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b8433a"/></marker><marker id="ah-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4fa0"/></marker><marker id="ah-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b7480"/></marker><marker id="ah-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a8a3a"/></marker><marker id="ah-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a07a12"/></marker><marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1b1f24"/></marker></defs>
+<rect width="1100" height="520" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24" text-anchor="start">Fix 2 - the joint q/k normalization in GatedDeltaNet</text>
+<text x="24" y="56" font-size="13" font-weight="400" fill="#6b7480" text-anchor="start">Bonsai normalizes q and k together as one 32-head tensor, then hands the op two 16-head views of it.</text>
+<rect x="40" y="90" width="460" height="56" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="270.0" y="122.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">L2-normalize [q (16 heads) | k (16 heads)] = 32 heads at once</text>
+<rect x="40" y="170" width="220" height="50" rx="6" fill="#f1f3f5" stroke="#6b7480" stroke-width="1.5"/>
+<text x="150.0" y="199.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">VIEW q = heads 0..15</text>
+<rect x="280" y="170" width="220" height="50" rx="6" fill="#f1f3f5" stroke="#6b7480" stroke-width="1.5"/>
+<text x="390.0" y="199.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">VIEW k = heads 16..31</text>
+<line x1="150" y1="146" x2="150" y2="170" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="150.0,170.0 154.5,161.0 145.5,161.0" fill="#1b1f24"/>
+<line x1="390" y1="146" x2="390" y2="170" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="390.0,170.0 394.5,161.0 385.5,161.0" fill="#1b1f24"/>
+<text x="40" y="254" font-size="13" font-weight="600" fill="#b8433a" text-anchor="start">Before: VIEW is a pass-through on this backend ('the consumer slices').</text>
+<text x="40" y="274" font-size="13" font-weight="600" fill="#b8433a" text-anchor="start">The GDN translator sliced its v input - but not q and k.</text>
+<rect x="40" y="290" width="460" height="50" rx="6" fill="#f6dedb" stroke="#b8433a" stroke-width="1.5"/>
+<text x="270.0" y="319.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">q and k each arrive with all 32 heads</text>
+<rect x="40" y="356" width="460" height="66" rx="6" fill="#f6dedb" stroke="#b8433a" stroke-width="1.5"/>
+<text x="270.0" y="385.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">grouped heads: tile x3 (16 q/k heads -&gt; 48 v heads)</text>
+<text x="270.0" y="401.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">x3 computed from declared 16, applied to actual 32 -&gt; 96</text>
+<rect x="40" y="438" width="460" height="44" rx="6" fill="#f6dedb" stroke="#b8433a" stroke-width="1.5"/>
+<text x="270.0" y="464.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">96 q/k heads vs 48 v heads -&gt; op rejects the graph</text>
+<line x1="270" y1="340" x2="270" y2="356" stroke="#b8433a" stroke-width="1.6"/>
+<polygon points="270.0,356.0 274.5,347.0 265.5,347.0" fill="#b8433a"/>
+<line x1="270" y1="422" x2="270" y2="438" stroke="#b8433a" stroke-width="1.6"/>
+<polygon points="270.0,438.0 274.5,429.0 265.5,429.0" fill="#b8433a"/>
+<text x="600" y="254" font-size="13" font-weight="600" fill="#3a8a3a" text-anchor="start">After: re-slice q and k on the head axis, like v.</text>
+<rect x="600" y="290" width="460" height="50" rx="6" fill="#e2f0e2" stroke="#3a8a3a" stroke-width="1.5"/>
+<text x="830.0" y="319.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">q = 16 heads, k = 16 heads</text>
+<rect x="600" y="356" width="460" height="66" rx="6" fill="#e2f0e2" stroke="#3a8a3a" stroke-width="1.5"/>
+<text x="830.0" y="385.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">tile x3 -&gt; 48 heads</text>
+<text x="830.0" y="401.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">matches 48 value heads</text>
+<rect x="600" y="438" width="460" height="44" rx="6" fill="#e2f0e2" stroke="#3a8a3a" stroke-width="1.5"/>
+<text x="830.0" y="464.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">correct output</text>
+<line x1="830" y1="340" x2="830" y2="356" stroke="#3a8a3a" stroke-width="1.6"/>
+<polygon points="830.0,356.0 834.5,347.0 825.5,347.0" fill="#3a8a3a"/>
+<line x1="830" y1="422" x2="830" y2="438" stroke="#3a8a3a" stroke-width="1.6"/>
+<polygon points="830.0,438.0 834.5,429.0 825.5,429.0" fill="#3a8a3a"/>
+<rect x="600" y="90" width="460" height="81.19999999999999" rx="6" fill="#fbf1d3" stroke="#a07a12" stroke-width="1.5"/>
+<text x="610" y="110.07999999999998" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">Why nobody hit it before: Qwen3.5 / 3.6 MoE normalize</text>
+<text x="610" y="126.63999999999999" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">q and k separately. Here the declared shape said 16</text>
+<text x="610" y="143.2" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">and the real tensor was 32 - compare declared vs actual.</text>
+<text x="610" y="159.76" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">No-op when they match, so other models are untouched.</text>
+</svg>

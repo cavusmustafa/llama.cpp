@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 620" width="1100" height="620" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="ah-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fb3"/></marker><marker id="ah-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a8c82"/></marker><marker id="ah-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c96a1b"/></marker><marker id="ah-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b8433a"/></marker><marker id="ah-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4fa0"/></marker><marker id="ah-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b7480"/></marker><marker id="ah-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a8a3a"/></marker><marker id="ah-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a07a12"/></marker><marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1b1f24"/></marker></defs>
+<rect width="1100" height="620" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24" text-anchor="start">Bonsai 2 27B - a hybrid-attention model (GGUF architecture 'qwen35')</text>
+<text x="24" y="56" font-size="13" font-weight="400" fill="#6b7480" text-anchor="start">27 B parameters, dense (no experts). 64 layers, hidden size 5120, vocabulary 248 320, context up to 262 k tokens.</text>
+<rect x="40" y="90" width="150" height="60" rx="6" fill="#f1f3f5" stroke="#6b7480" stroke-width="1.5"/>
+<text x="115.0" y="116.03999999999999" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">token embedding</text>
+<text x="115.0" y="132.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">248320 x 5120</text>
+<line x1="190" y1="120" x2="222" y2="120" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="222.0,120.0 213.0,115.5 213.0,124.5" fill="#1b1f24"/>
+<rect x="226" y="96" width="38" height="48" rx="4" fill="#e4f1ef" stroke="#2a8c82" opacity="1.0"/>
+<text x="245" y="125" font-size="11" font-weight="600" fill="#2a8c82" text-anchor="middle">GDN</text>
+<rect x="268" y="96" width="38" height="48" rx="4" fill="#e4f1ef" stroke="#2a8c82" opacity="1.0"/>
+<text x="287" y="125" font-size="11" font-weight="600" fill="#2a8c82" text-anchor="middle">GDN</text>
+<rect x="310" y="96" width="38" height="48" rx="4" fill="#e4f1ef" stroke="#2a8c82" opacity="1.0"/>
+<text x="329" y="125" font-size="11" font-weight="600" fill="#2a8c82" text-anchor="middle">GDN</text>
+<rect x="352" y="96" width="38" height="48" rx="4" fill="#ebe5f4" stroke="#6b4fa0" opacity="1.0"/>
+<text x="371" y="125" font-size="11" font-weight="600" fill="#6b4fa0" text-anchor="middle">ATT</text>
+<rect x="404" y="96" width="38" height="48" rx="4" fill="#e4f1ef" stroke="#2a8c82" opacity="1.0"/>
+<text x="423" y="125" font-size="11" font-weight="600" fill="#2a8c82" text-anchor="middle">GDN</text>
+<rect x="446" y="96" width="38" height="48" rx="4" fill="#e4f1ef" stroke="#2a8c82" opacity="1.0"/>
+<text x="465" y="125" font-size="11" font-weight="600" fill="#2a8c82" text-anchor="middle">GDN</text>
+<rect x="488" y="96" width="38" height="48" rx="4" fill="#e4f1ef" stroke="#2a8c82" opacity="1.0"/>
+<text x="507" y="125" font-size="11" font-weight="600" fill="#2a8c82" text-anchor="middle">GDN</text>
+<rect x="530" y="96" width="38" height="48" rx="4" fill="#ebe5f4" stroke="#6b4fa0" opacity="1.0"/>
+<text x="549" y="125" font-size="11" font-weight="600" fill="#6b4fa0" text-anchor="middle">ATT</text>
+<rect x="582" y="96" width="38" height="48" rx="4" fill="#e4f1ef" stroke="#2a8c82" opacity="1.0"/>
+<text x="601" y="125" font-size="11" font-weight="600" fill="#2a8c82" text-anchor="middle">GDN</text>
+<rect x="624" y="96" width="38" height="48" rx="4" fill="#e4f1ef" stroke="#2a8c82" opacity="1.0"/>
+<text x="643" y="125" font-size="11" font-weight="600" fill="#2a8c82" text-anchor="middle">GDN</text>
+<rect x="666" y="96" width="38" height="48" rx="4" fill="#e4f1ef" stroke="#2a8c82" opacity="1.0"/>
+<text x="685" y="125" font-size="11" font-weight="600" fill="#2a8c82" text-anchor="middle">GDN</text>
+<rect x="708" y="96" width="38" height="48" rx="4" fill="#ebe5f4" stroke="#6b4fa0" opacity="1.0"/>
+<text x="727" y="125" font-size="11" font-weight="600" fill="#6b4fa0" text-anchor="middle">ATT</text>
+<rect x="760" y="96" width="38" height="48" rx="4" fill="#e4f1ef" stroke="#2a8c82" opacity="1.0"/>
+<text x="779" y="125" font-size="11" font-weight="600" fill="#2a8c82" text-anchor="middle">GDN</text>
+<rect x="802" y="96" width="38" height="48" rx="4" fill="#e4f1ef" stroke="#2a8c82" opacity="1.0"/>
+<text x="821" y="125" font-size="11" font-weight="600" fill="#2a8c82" text-anchor="middle">GDN</text>
+<rect x="844" y="96" width="38" height="48" rx="4" fill="#e4f1ef" stroke="#2a8c82" opacity="1.0"/>
+<text x="863" y="125" font-size="11" font-weight="600" fill="#2a8c82" text-anchor="middle">GDN</text>
+<rect x="886" y="96" width="38" height="48" rx="4" fill="#ebe5f4" stroke="#6b4fa0" opacity="1.0"/>
+<text x="905" y="125" font-size="11" font-weight="600" fill="#6b4fa0" text-anchor="middle">ATT</text>
+<text x="560" y="170" font-size="12" font-weight="400" fill="#6b7480" text-anchor="middle">the pattern [GDN, GDN, GDN, Attention] repeats 16 times = 48 GatedDeltaNet + 16 attention layers</text>
+<line x1="934" y1="120" x2="964" y2="120" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="964.0,120.0 955.0,115.5 955.0,124.5" fill="#1b1f24"/>
+<rect x="966" y="90" width="110" height="60" rx="6" fill="#f1f3f5" stroke="#6b7480" stroke-width="1.5"/>
+<text x="1021.0" y="116.03999999999999" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">LM head</text>
+<text x="1021.0" y="132.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">5120 -&gt; 248320</text>
+<rect x="40" y="210" width="500" height="230" rx="6" fill="#e4f1ef" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="290.0" y="246.51999999999998" font-size="13" font-weight="600" fill="#2a8c82" text-anchor="middle">GatedDeltaNet layer (48 of them)</text>
+<text x="290.0" y="263.08" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">Linear attention: no attention matrix at all.</text>
+<text x="290.0" y="279.64" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">Keeps a fixed-size memory per head - the recurrent state,</text>
+<text x="290.0" y="296.2" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">a 128 x 128 matrix - and updates it as each token streams by.</text>
+<text x="290.0" y="312.76" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle"></text>
+<text x="290.0" y="329.32" font-size="12" font-weight="600" fill="#1b1f24" text-anchor="middle">cost per token is constant, however long the context is</text>
+<text x="290.0" y="345.88" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle"></text>
+<text x="290.0" y="362.43999999999994" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">16 q/k heads serve 48 value heads (grouped)</text>
+<text x="290.0" y="379.0" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">pieces: 1-D conv over q/k/v, L2-normalize q and k,</text>
+<text x="290.0" y="395.55999999999995" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">two learned gates (alpha, beta), the recurrent update</text>
+<text x="290.0" y="412.12" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">state per layer: [1, 48, 128, 128] f32 = 3.1 MB</text>
+<rect x="560" y="210" width="500" height="230" rx="6" fill="#ebe5f4" stroke="#6b4fa0" stroke-width="1.5"/>
+<text x="810.0" y="263.08" font-size="13" font-weight="600" fill="#6b4fa0" text-anchor="middle">Full-attention layer (16 of them)</text>
+<text x="810.0" y="279.64" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">Ordinary softmax attention, so the model can still</text>
+<text x="810.0" y="296.2" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">do exact long-range look-ups.</text>
+<text x="810.0" y="312.76" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle"></text>
+<text x="810.0" y="329.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">24 query heads over 4 key/value heads (GQA)</text>
+<text x="810.0" y="345.88" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle"></text>
+<text x="810.0" y="362.44" font-size="12" font-weight="600" fill="#1b1f24" text-anchor="middle">keeps a KV cache that grows with the context</text>
+<text x="810.0" y="379.0" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle"></text>
+<text x="810.0" y="395.55999999999995" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">only 1 layer in 4, so the KV cache is small</text>
+<rect x="40" y="460" width="1020" height="70" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="550.0" y="482.76" font-size="13" font-weight="600" fill="#2f6fb3" text-anchor="middle">Feed-forward (SwiGLU)</text>
+<text x="550.0" y="499.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">every layer, of both kinds, ends with the same SwiGLU MLP:  5120 -&gt; 17408 (gate) and 17408 (up) -&gt; SiLU(gate) x up -&gt; 5120 (down)</text>
+<text x="550.0" y="515.88" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">these big matrices hold most of the 27 B parameters, and they are the ternary ones</text>
+<rect x="40" y="548" width="1020" height="47.599999999999994" rx="6" fill="#fbf1d3" stroke="#a07a12" stroke-width="1.5"/>
+<text x="50" y="567.84" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">Why it matters here: GatedDeltaNet has a more intricate graph than attention (conv, per-head norm, gates, a scan), so most shape bugs</text>
+<text x="50" y="584.4" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">and the biggest decode overhead were found there. The small alpha/beta projections are stored in BF16, not ternary.</text>
+</svg>

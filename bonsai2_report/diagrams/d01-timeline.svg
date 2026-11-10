@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 560" width="1100" height="560" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="ah-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fb3"/></marker><marker id="ah-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a8c82"/></marker><marker id="ah-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c96a1b"/></marker><marker id="ah-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b8433a"/></marker><marker id="ah-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4fa0"/></marker><marker id="ah-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b7480"/></marker><marker id="ah-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a8a3a"/></marker><marker id="ah-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a07a12"/></marker><marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1b1f24"/></marker></defs>
+<rect width="1100" height="560" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24" text-anchor="start">The project at a glance - six steps from 'does not load' to 'fits in 16 GB'</text>
+<text x="24" y="56" font-size="13" font-weight="400" fill="#6b7480" text-anchor="start">Intel Arc B390 iGPU, Bonsai 2 27B ternary (PQ2_0). Each step answered one question and fed the next.</text>
+<line x1="50" y1="170" x2="1060" y2="170" stroke="#6b7480" stroke-width="2"/>
+<circle cx="100" cy="170" r="9" fill="#2f6fb3" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="100" y="148" font-size="13" font-weight="600" fill="#6b7480" text-anchor="middle">Oct 7-8</text>
+<rect x="22" y="204" width="156" height="118" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="100.0" y="242.48" font-size="13" font-weight="600" fill="#2f6fb3" text-anchor="middle">1. Make it run</text>
+<text x="100.0" y="259.03999999999996" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">4 fixes in ggml-openvino</text>
+<text x="100.0" y="275.59999999999997" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">correct output</text>
+<text x="100.0" y="292.15999999999997" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">prefill 3.2x Vulkan</text>
+<line x1="100" y1="179" x2="100" y2="204" stroke="#2f6fb3" stroke-width="1.5"/>
+<circle cx="275" cy="170" r="9" fill="#6b4fa0" stroke="#6b4fa0" stroke-width="1.5"/>
+<text x="275" y="148" font-size="13" font-weight="600" fill="#6b7480" text-anchor="middle">Oct 8-16</text>
+<rect x="197" y="204" width="156" height="118" rx="6" fill="#ebe5f4" stroke="#6b4fa0" stroke-width="1.5"/>
+<text x="275.0" y="242.48" font-size="13" font-weight="600" fill="#6b4fa0" text-anchor="middle">2. Native reference</text>
+<text x="275.0" y="259.03999999999996" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">build the OpenVINO IR</text>
+<text x="275.0" y="275.59999999999997" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">native OV decodes 15.0</text>
+<text x="275.0" y="292.15999999999997" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">-&gt; 1.22x headroom</text>
+<line x1="275" y1="179" x2="275" y2="204" stroke="#6b4fa0" stroke-width="1.5"/>
+<circle cx="450" cy="170" r="9" fill="#2a8c82" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="450" y="148" font-size="13" font-weight="600" fill="#6b7480" text-anchor="middle">Oct 16-17</text>
+<rect x="372" y="204" width="156" height="118" rx="6" fill="#e4f1ef" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="450.0" y="242.48" font-size="13" font-weight="600" fill="#2a8c82" text-anchor="middle">3. Decode gap</text>
+<text x="450.0" y="259.03999999999996" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">GPU 100% busy, not BW</text>
+<text x="450.0" y="275.59999999999997" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">extra graph ops</text>
+<text x="450.0" y="292.15999999999997" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">12.24 -&gt; 13.46 t/s</text>
+<line x1="450" y1="179" x2="450" y2="204" stroke="#2a8c82" stroke-width="1.5"/>
+<circle cx="625" cy="170" r="9" fill="#3a8a3a" stroke="#3a8a3a" stroke-width="1.5"/>
+<text x="625" y="148" font-size="13" font-weight="600" fill="#6b7480" text-anchor="middle">Oct 30</text>
+<rect x="547" y="204" width="156" height="118" rx="6" fill="#e2f0e2" stroke="#3a8a3a" stroke-width="1.5"/>
+<text x="625.0" y="242.48" font-size="13" font-weight="600" fill="#3a8a3a" text-anchor="middle">4. Master + GenAI</text>
+<text x="625.0" y="259.03999999999996" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">PR merged upstream</text>
+<text x="625.0" y="275.59999999999997" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">real GenAI pipeline</text>
+<text x="625.0" y="292.15999999999997" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">final perf table</text>
+<line x1="625" y1="179" x2="625" y2="204" stroke="#3a8a3a" stroke-width="1.5"/>
+<circle cx="800" cy="170" r="9" fill="#c96a1b" stroke="#c96a1b" stroke-width="1.5"/>
+<text x="800" y="148" font-size="13" font-weight="600" fill="#6b7480" text-anchor="middle">Nov 4-5</text>
+<rect x="722" y="204" width="156" height="118" rx="6" fill="#fbeadb" stroke="#c96a1b" stroke-width="1.5"/>
+<text x="800.0" y="242.48" font-size="13" font-weight="600" fill="#c96a1b" text-anchor="middle">5. Memory</text>
+<text x="800.0" y="259.03999999999996" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">load peak 28-35 GiB</text>
+<text x="800.0" y="275.59999999999997" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">3 GPU-plugin causes</text>
+<text x="800.0" y="292.15999999999997" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">-&gt; 10.0 GiB</text>
+<line x1="800" y1="179" x2="800" y2="204" stroke="#c96a1b" stroke-width="1.5"/>
+<circle cx="975" cy="170" r="9" fill="#b8433a" stroke="#b8433a" stroke-width="1.5"/>
+<text x="975" y="148" font-size="13" font-weight="600" fill="#6b7480" text-anchor="middle">Nov 9</text>
+<rect x="897" y="204" width="156" height="118" rx="6" fill="#f6dedb" stroke="#b8433a" stroke-width="1.5"/>
+<text x="975.0" y="242.48" font-size="13" font-weight="600" fill="#b8433a" text-anchor="middle">6. 16 GB test</text>
+<text x="975.0" y="259.03999999999996" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">15.4 GiB of RAM</text>
+<text x="975.0" y="275.59999999999997" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">correct, 12.8 t/s</text>
+<text x="975.0" y="292.15999999999997" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">PASS</text>
+<line x1="975" y1="179" x2="975" y2="204" stroke="#b8433a" stroke-width="1.5"/>
+<text x="550" y="380" font-size="15" font-weight="600" fill="#1b1f24" text-anchor="middle">What the two big numbers mean</text>
+<rect x="110" y="400" width="400" height="120" rx="6" fill="#e4f1ef" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="310.0" y="428.8" font-size="14" font-weight="600" fill="#2a8c82" text-anchor="middle">Speed</text>
+<text x="310.0" y="446.74" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="middle">ggml-openvino: 12.24 -&gt; 13.28 t/s (final stack)</text>
+<text x="310.0" y="464.68" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="middle">prefill 536 t/s = 3.18x Vulkan</text>
+<text x="310.0" y="482.62" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="middle">native OpenVINO GenAI ceiling: 14.57 t/s</text>
+<text x="310.0" y="500.56" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="middle">remaining gap 1.10x, root-caused</text>
+<rect x="590" y="400" width="400" height="120" rx="6" fill="#fbeadb" stroke="#c96a1b" stroke-width="1.5"/>
+<text x="790.0" y="428.8" font-size="14" font-weight="600" fill="#c96a1b" text-anchor="middle">Memory</text>
+<text x="790.0" y="446.74" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="middle">peak while loading: 28.2 -&gt; 10.0 GiB</text>
+<text x="790.0" y="464.68" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="middle">compile time: ~63 s -&gt; ~10 s</text>
+<text x="790.0" y="482.62" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="middle">runs on 15.4 GiB of physical RAM</text>
+<text x="790.0" y="500.56" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="middle">output unchanged, decode unchanged</text>
+</svg>

@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 520" width="1100" height="520" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="ah-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fb3"/></marker><marker id="ah-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a8c82"/></marker><marker id="ah-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c96a1b"/></marker><marker id="ah-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b8433a"/></marker><marker id="ah-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4fa0"/></marker><marker id="ah-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b7480"/></marker><marker id="ah-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a8a3a"/></marker><marker id="ah-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a07a12"/></marker><marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1b1f24"/></marker></defs>
+<rect width="1100" height="520" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24" text-anchor="start">Measuring memory on an integrated GPU - four kinds, only two of them are visible to the usual tools</text>
+<text x="24" y="56" font-size="13" font-weight="400" fill="#6b7480" text-anchor="start">Getting this wrong produced several false conclusions; the fixes were only found after switching to exact per-process numbers.</text>
+<rect x="40" y="90" width="242" height="120" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="161.0" y="129.48" font-size="13" font-weight="600" fill="#2f6fb3" text-anchor="middle">CPU heap (RssAnon)</text>
+<text x="161.0" y="146.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">process memory: ggml copies,</text>
+<text x="161.0" y="162.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">transformed model, compiler</text>
+<text x="161.0" y="179.16" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">visible in RSS and cgroups</text>
+<text x="161" y="230" font-size="11" font-weight="600" fill="#2f6fb3" text-anchor="middle">measure: /proc/pid/status</text>
+<rect x="302" y="90" width="242" height="120" rx="6" fill="#e4f1ef" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="423.0" y="129.48" font-size="13" font-weight="600" fill="#2a8c82" text-anchor="middle">GPU buffers (GTT)</text>
+<text x="423.0" y="146.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">weights + activations on the GPU,</text>
+<text x="423.0" y="162.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">but physically in system RAM</text>
+<text x="423.0" y="179.16" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">NOT in RSS, NOT charged to cgroups</text>
+<text x="423" y="230" font-size="11" font-weight="600" fill="#2a8c82" text-anchor="middle">measure: xe fdinfo drm-total-gtt</text>
+<rect x="564" y="90" width="242" height="120" rx="6" fill="#f1f3f5" stroke="#6b7480" stroke-width="1.5"/>
+<text x="685.0" y="129.48" font-size="13" font-weight="600" fill="#6b7480" text-anchor="middle">page cache (file)</text>
+<text x="685.0" y="146.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">mmapped GGUF / spill files</text>
+<text x="685.0" y="162.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">clean pages, reclaimable</text>
+<text x="685.0" y="179.16" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">counts as 'available'</text>
+<text x="685" y="230" font-size="11" font-weight="600" fill="#6b7480" text-anchor="middle">usually ignore</text>
+<rect x="826" y="90" width="242" height="120" rx="6" fill="#fbeadb" stroke="#c96a1b" stroke-width="1.5"/>
+<text x="947.0" y="129.48" font-size="13" font-weight="600" fill="#c96a1b" text-anchor="middle">TTM page pool</text>
+<text x="947.0" y="146.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">GPU pages freed by the process</text>
+<text x="947.0" y="162.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">kept by the driver for reuse</text>
+<text x="947.0" y="179.16" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">not 'available' until shrunk</text>
+<text x="947" y="230" font-size="11" font-weight="600" fill="#c96a1b" text-anchor="middle">why 'after compile' looked huge</text>
+<rect x="40" y="260" width="500" height="110" rx="6" fill="#f6dedb" stroke="#b8433a" stroke-width="1.5"/>
+<text x="290.0" y="286.2" font-size="13" font-weight="600" fill="#b8433a" text-anchor="middle">What lied</text>
+<text x="290.0" y="302.76" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">cgroup memory.max=16G 'passes' while the box loses 34 GiB:</text>
+<text x="290.0" y="319.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">GPU buffers are not memcg-charged.</text>
+<text x="290.0" y="335.88" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">System-wide MemAvailable swung by GBs (other users), even</text>
+<text x="290.0" y="352.44" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">went negative. Freed GPU memory stays 'used' (TTM pool).</text>
+<rect x="560" y="260" width="500" height="110" rx="6" fill="#e2f0e2" stroke="#3a8a3a" stroke-width="1.5"/>
+<text x="810.0" y="286.2" font-size="13" font-weight="600" fill="#3a8a3a" text-anchor="middle">What worked</text>
+<text x="810.0" y="302.76" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">peak of (RssAnon + drm-total-gtt) of the process,</text>
+<text x="810.0" y="319.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">sampled every 100 ms (memprobe/phases.py)</text>
+<text x="810.0" y="335.88" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">+ an LD_PRELOAD heap tracker that records live bytes per</text>
+<text x="810.0" y="352.44" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">call stack, to name the code that allocates</text>
+<rect x="40" y="392" width="1020" height="47.599999999999994" rx="6" fill="#fbf1d3" stroke="#a07a12" stroke-width="1.5"/>
+<text x="50" y="411.84000000000003" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">Faithful '16 GB' test: physically take RAM away. Hugepage reservation failed on this box (27 days uptime -&gt; fragmented,</text>
+<text x="50" y="428.40000000000003" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">stopped at 41 GiB, and MemAvailable overstated free memory under a big pool). An mlock'd 47 GiB 'hog' process worked (step 6).</text>
+</svg>

@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 470" width="1100" height="470" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="ah-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fb3"/></marker><marker id="ah-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a8c82"/></marker><marker id="ah-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c96a1b"/></marker><marker id="ah-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b8433a"/></marker><marker id="ah-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4fa0"/></marker><marker id="ah-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b7480"/></marker><marker id="ah-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a8a3a"/></marker><marker id="ah-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a07a12"/></marker><marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1b1f24"/></marker></defs>
+<rect width="1100" height="470" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24" text-anchor="start">TernOCL - how one compiled model uses different kernels for prompt and decode</text>
+<text x="24" y="56" font-size="13" font-weight="400" fill="#6b7480" text-anchor="start">The kernel is chosen at run time from M = the number of tokens in this call, not at compile time.</text>
+<rect x="40" y="100" width="220" height="70" rx="6" fill="#e4f1ef" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="150.0" y="130.71" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="middle">FullyConnected</text>
+<text x="150.0" y="148.65" font-size="13" font-weight="400" fill="#1b1f24" text-anchor="middle">(ternary weights)</text>
+<rect x="320" y="100" width="230" height="70" rx="6" fill="#f1f3f5" stroke="#6b7480" stroke-width="1.5"/>
+<text x="435.0" y="131.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">M = tokens in this call</text>
+<text x="435.0" y="147.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">launch class = bucket(M), 8 slots</text>
+<line x1="260" y1="135" x2="320" y2="135" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="320.0,135.0 311.0,130.5 311.0,139.5" fill="#1b1f24"/>
+<rect x="640" y="80" width="420" height="70" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="850.0" y="102.75999999999999" font-size="13" font-weight="600" fill="#2f6fb3" text-anchor="middle">M &lt;= 8  (decode)</text>
+<text x="850.0" y="119.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">GEMV: tuned for 1 or a few tokens</text>
+<text x="850.0" y="135.88" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">reads every weight once per token -&gt; memory-bound</text>
+<rect x="640" y="170" width="420" height="86" rx="6" fill="#ebe5f4" stroke="#6b4fa0" stroke-width="1.5"/>
+<text x="850.0" y="192.48" font-size="13" font-weight="600" fill="#6b4fa0" text-anchor="middle">M &gt; 8  (prompt / batch)</text>
+<text x="850.0" y="209.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">tiled GEMM, DPAS matrix instructions</text>
+<text x="850.0" y="225.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">default: 2-bit codes -&gt; fp16 in registers, fp16 x fp16</text>
+<text x="850.0" y="242.16" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">INT8_PREFILL=1: int2 x int8 DPAS, activations -&gt; int8</text>
+<line x1="550" y1="125" x2="640" y2="115" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="640.0,115.0 630.6,111.5 631.6,120.5" fill="#1b1f24"/>
+<line x1="550" y1="145" x2="640" y2="210" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="640.0,210.0 635.3,201.1 630.1,208.4" fill="#1b1f24"/>
+<text x="40" y="230" font-size="12" font-weight="400" fill="#6b7480" text-anchor="start">Each kernel is built with clBuildProgram on first use</text>
+<text x="40" y="248" font-size="12" font-weight="400" fill="#6b7480" text-anchor="start">and cached per launch class, so a node collects a</text>
+<text x="40" y="266" font-size="12" font-weight="400" fill="#6b7480" text-anchor="start">handful of OpenCL kernels over the process lifetime.</text>
+<rect x="40" y="300" width="500" height="140" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="290.0" y="349.48" font-size="13" font-weight="600" fill="#2f6fb3" text-anchor="middle">Default prefill</text>
+<text x="290.0" y="366.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">2-bit weights unpacked to fp16 in registers</text>
+<text x="290.0" y="382.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">activations stay fp16 - no extra rounding</text>
+<text x="290.0" y="399.16" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">pp128 237 t/s, pp512 536 t/s</text>
+<rect x="560" y="300" width="500" height="140" rx="6" fill="#ebe5f4" stroke="#6b4fa0" stroke-width="1.5"/>
+<text x="810.0" y="341.2" font-size="13" font-weight="600" fill="#6b4fa0" text-anchor="middle">int8 prefill (opt-in)</text>
+<text x="810.0" y="357.76" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">weights never unpacked; activations quantized to int8</text>
+<text x="810.0" y="374.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">per (row, 128 group) - faster, slightly lossy</text>
+<text x="810.0" y="390.88" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">pp128 547 t/s (2.3x), pp512 571 t/s (1.06x)</text>
+<text x="810.0" y="407.44" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">off by default; env OV_GPU_TERNOCL_INT2_INT8_PREFILL=1</text>
+</svg>

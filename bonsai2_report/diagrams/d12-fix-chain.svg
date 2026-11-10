@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 460" width="1100" height="460" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="ah-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fb3"/></marker><marker id="ah-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a8c82"/></marker><marker id="ah-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c96a1b"/></marker><marker id="ah-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b8433a"/></marker><marker id="ah-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4fa0"/></marker><marker id="ah-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b7480"/></marker><marker id="ah-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a8a3a"/></marker><marker id="ah-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a07a12"/></marker><marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1b1f24"/></marker></defs>
+<rect width="1100" height="460" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24" text-anchor="start">The debugging lesson - the error message was five steps away from the cause</text>
+<text x="24" y="56" font-size="13" font-weight="400" fill="#6b7480" text-anchor="start">Fix 3 never showed up as a shape error. It surfaced as a kernel-acceptance failure.</text>
+<rect x="30" y="110" width="157" height="70" rx="6" fill="#f6dedb" stroke="#b8433a" stroke-width="1.5"/>
+<text x="108.5" y="141.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">reshape target</text>
+<text x="108.5" y="157.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">baked as constants</text>
+<rect x="207" y="110" width="157" height="70" rx="6" fill="#fbeadb" stroke="#c96a1b" stroke-width="1.5"/>
+<text x="285.5" y="141.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">shape becomes</text>
+<text x="285.5" y="157.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">static</text>
+<line x1="187" y1="145" x2="207" y2="145" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="207.0,145.0 198.0,140.5 198.0,149.5" fill="#1b1f24"/>
+<rect x="384" y="110" width="157" height="70" rx="6" fill="#fbeadb" stroke="#c96a1b" stroke-width="1.5"/>
+<text x="462.5" y="141.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">gate/up merge pass</text>
+<text x="462.5" y="157.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">requires dynamic -&gt; skips</text>
+<line x1="364" y1="145" x2="384" y2="145" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="384.0,145.0 375.0,140.5 375.0,149.5" fill="#1b1f24"/>
+<rect x="561" y="110" width="157" height="70" rx="6" fill="#fbeadb" stroke="#c96a1b" stroke-width="1.5"/>
+<text x="639.5" y="141.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">ffn_gate keeps 3</text>
+<text x="639.5" y="157.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">fused ops</text>
+<line x1="541" y1="145" x2="561" y2="145" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="561.0,145.0 552.0,140.5 552.0,149.5" fill="#1b1f24"/>
+<rect x="738" y="110" width="157" height="70" rx="6" fill="#fbeadb" stroke="#c96a1b" stroke-width="1.5"/>
+<text x="816.5" y="141.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">TernOCL epilogue</text>
+<text x="816.5" y="157.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">table knows 1-2 -&gt; reject</text>
+<line x1="718" y1="145" x2="738" y2="145" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="738.0,145.0 729.0,140.5 729.0,149.5" fill="#1b1f24"/>
+<rect x="915" y="110" width="157" height="70" rx="6" fill="#f6dedb" stroke="#b8433a" stroke-width="1.5"/>
+<text x="993.5" y="141.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">hard build failure</text>
+<text x="993.5" y="157.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">(by design)</text>
+<line x1="895" y1="145" x2="915" y2="145" stroke="#1b1f24" stroke-width="1.6"/>
+<polygon points="915.0,145.0 906.0,140.5 906.0,149.5" fill="#1b1f24"/>
+<text x="108" y="216" font-size="13" font-weight="600" fill="#b8433a" text-anchor="middle">real cause</text>
+<text x="993" y="216" font-size="13" font-weight="600" fill="#b8433a" text-anchor="middle">what the log said</text>
+<rect x="560" y="236" width="510" height="60" rx="6" fill="#f1f3f5" stroke="#6b7480" stroke-width="1.5"/>
+<text x="815.0" y="262.37" font-size="11" font-weight="400" fill="#1b1f24" text-anchor="middle">'ffn_gate carries a Hadamard input transform but the</text>
+<text x="815.0" y="277.55" font-size="11" font-weight="400" fill="#1b1f24" text-anchor="middle">TernOCL impl rejected it: fused chain has no folded epilogue'</text>
+<rect x="30" y="236" width="500" height="60" rx="6" fill="#f1f3f5" stroke="#6b7480" stroke-width="1.5"/>
+<text x="280.0" y="262.37" font-size="11" font-weight="400" fill="#1b1f24" text-anchor="middle">Why a reject is fatal here: this matmul has the rotation folded in,</text>
+<text x="280.0" y="277.55" font-size="11" font-weight="400" fill="#1b1f24" text-anchor="middle">and TernOCL is the only kernel that applies it. Falling back = garbage.</text>
+<rect x="30" y="320" width="1040" height="64.4" rx="6" fill="#fbf1d3" stroke="#a07a12" stroke-width="1.5"/>
+<text x="40" y="339.96" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">Rule of thumb: when a GPU-plugin fusion mysteriously does not fire, check whether shapes are still dynamic BEFORE studying the</text>
+<text x="40" y="356.52" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">pattern matcher. Several passes silently require dynamic shapes because they target generative models. After fix 3 the merged</text>
+<text x="40" y="373.08" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">nodes appear as ffn_gate_fused_2FCs, z_fused_2FCs, Qcur_full_fused_3FCs - the '_fused_NFCs' suffix is the merge naming its result.</text>
+</svg>

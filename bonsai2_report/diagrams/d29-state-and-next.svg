@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 470" width="1100" height="470" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="ah-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fb3"/></marker><marker id="ah-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a8c82"/></marker><marker id="ah-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c96a1b"/></marker><marker id="ah-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b8433a"/></marker><marker id="ah-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b4fa0"/></marker><marker id="ah-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b7480"/></marker><marker id="ah-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a8a3a"/></marker><marker id="ah-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a07a12"/></marker><marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1b1f24"/></marker></defs>
+<rect width="1100" height="470" fill="#ffffff"/>
+<text x="24" y="34" font-size="20" font-weight="600" fill="#1b1f24" text-anchor="start">Where everything lives, and what is still open</text>
+<text x="24" y="56" font-size="13" font-weight="400" fill="#6b7480" text-anchor="start">Code state as of 2026-11-09.</text>
+<rect x="40" y="90" width="330" height="180" rx="6" fill="#dce9f5" stroke="#2f6fb3" stroke-width="1.5"/>
+<text x="205.0" y="134.64" font-size="13" font-weight="600" fill="#2f6fb3" text-anchor="middle">llama.cpp (pushed)</text>
+<text x="205.0" y="151.2" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">cavusmustafa/llama.cpp</text>
+<text x="205.0" y="167.76" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">prism_ov_ternary (step 1)</text>
+<text x="205.0" y="184.32" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">prism_ov_ternary_kv4d (step 3)</text>
+<text x="205.0" y="200.88" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">prism_ov_ternary_sync (step 4)</text>
+<text x="205.0" y="217.44" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">PrismML fork base: PQ2_0 is fork-local</text>
+<text x="205.0" y="234.0" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">no PR open</text>
+<rect x="390" y="90" width="330" height="180" rx="6" fill="#e4f1ef" stroke="#2a8c82" stroke-width="1.5"/>
+<text x="555.0" y="142.92" font-size="13" font-weight="600" fill="#2a8c82" text-anchor="middle">OpenVINO</text>
+<text x="555.0" y="159.48" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">upstream master contains PR #38460</text>
+<text x="555.0" y="176.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">(TernOCL) since 2026-10</text>
+<text x="555.0" y="192.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">memory fixes: uncommitted patch,</text>
+<text x="555.0" y="209.15999999999997" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">8 files, built in build-dbgcaps</text>
+<text x="555.0" y="225.71999999999997" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">memprobe/ov_compile_memory_fixes.patch</text>
+<rect x="740" y="90" width="320" height="180" rx="6" fill="#f1f3f5" stroke="#6b7480" stroke-width="1.5"/>
+<text x="900.0" y="142.92" font-size="13" font-weight="600" fill="#6b7480" text-anchor="middle">Tools</text>
+<text x="900.0" y="159.48" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">memprobe/phases.py (anon+GTT timeline)</text>
+<text x="900.0" y="176.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">memprobe/ovcompile (pure-OV repro)</text>
+<text x="900.0" y="192.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">memprobe/heaptrace (alloc stacks)</text>
+<text x="900.0" y="209.15999999999997" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">memprobe/limit16.sh + hog.py</text>
+<text x="900.0" y="225.71999999999997" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="middle">bonsai-ov/gpu_busy.py (xe PMU)</text>
+<rect x="40" y="290" width="1020" height="150" rx="6" fill="#fbeadb" stroke="#c96a1b" stroke-width="1.5"/>
+<text x="50" y="327.92" font-size="13" font-weight="600" fill="#c96a1b" text-anchor="start">Next steps</text>
+<text x="50" y="344.48" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">1. memory fixes -&gt; upstream OpenVINO: unit tests, Windows eviction path, measure const-prop chunking on a dGPU</text>
+<text x="50" y="361.04" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">2. device-resident GDN recurrent state: ~+4.7% decode (-&gt; ~14.0 t/s, gap to native ~1.04x)</text>
+<text x="50" y="377.6" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">3. PTQ1_0 (Bonsai 1, 1.58-bit) in ggml-openvino - not supported yet</text>
+<text x="50" y="394.16" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">4. upstreaming the ternary backend work is blocked until PQ2_0 exists outside the PrismML fork</text>
+<text x="50" y="410.72" font-size="12" font-weight="400" fill="#1b1f24" text-anchor="start">5. int8 prefill as default needs a real accuracy run (GSM8K-style), not a 90-token diff</text>
+</svg>
