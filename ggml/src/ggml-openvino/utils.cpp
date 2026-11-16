@@ -379,6 +379,20 @@ static std::string dynamic_graph_signature(const ggml_cgraph * graph,
     return key;
 }
 
+// The CPU plugin exports its MoE op (GatherMatmulCompressed) but cannot import it again ("unsupported opset",
+// OpenVINO 2026.4 and 2026.5). Writing such a blob makes every later run fail the import and compile again.
+static bool ggml_openvino_cpu_blob_importable(const std::string & device, const std::shared_ptr<ov::Model> & model) {
+    if (device != "CPU") {
+        return true;
+    }
+    for (const auto & op : model->get_ops()) {
+        if (std::string(op->get_type_name()).rfind("GatherMatmul", 0) == 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool compiled_model_matches_graph(const ov::CompiledModel & model,
                                          const std::vector<std::string> & inputs,
                                          const std::vector<std::string> & outputs,
@@ -853,7 +867,7 @@ ov::Tensor get_ov_input_tensor_static_prefill(const std::shared_ptr<GgmlOvDecode
     if (chunk_index > 0 && param_name == "cache_rs_reset_len") {
         // The recurrent-state clear belongs to the start of the sequence. Re-applying it on every
         // chunk would wipe the state accumulated by the preceding chunks, so disable it (a zero
-        // length makes scale.cpp's keep-mask select every slot) after the first chunk.
+        // length makes translate_recurrent_cache_reset keep every slot) after the first chunk.
         ov::Tensor input_tensor(ov::element::i64, ov::Shape{1});
         *input_tensor.data<int64_t>() = 0;
         return input_tensor;
@@ -1439,21 +1453,23 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
                         ggml_openvino_model_cache_blob_path(model_cache_dir, candidate_fp);
                     const std::string candidate_manifest =
                         ggml_openvino_model_cache_manifest_path(model_cache_dir, candidate_fp);
-                    std::ifstream blob_in(candidate_blob, std::ios::binary);
                     std::vector<std::string> saved_inputs, saved_outputs;
-                    if (!blob_in.is_open() ||
+                    if (!std::ifstream(candidate_blob, std::ios::binary).is_open() ||
                         !ggml_openvino_model_cache_verify_manifest(candidate_manifest, cgraph, candidate_fp,
                                                                    saved_inputs, saved_outputs)) {
                         continue;
                     }
                     const int64_t import_start = ggml_time_us();
                     try {
+                        // Import from a memory-mapped tensor instead of a stream: a stream import reads the whole
+                        // blob into a heap buffer while the plugin builds its own copy of the weights.
+                        const ov::Tensor blob = ov::read_tensor_data(candidate_blob);
                         ov::CompiledModel cm;
                         auto remote_context = ggml_openvino_get_remote_context(device);
                         if (remote_context.has_value()) {
-                            cm = core.import_model(blob_in, remote_context.value(), mc_config);
+                            cm = core.import_model(blob, remote_context.value(), mc_config);
                         } else {
-                            cm = core.import_model(blob_in, device, mc_config);
+                            cm = core.import_model(blob, device, mc_config);
                         }
                         // CPU serialization can rename Results that share a name with a Parameter.
                         if (!saved_inputs.empty() || !saved_outputs.empty()) {
@@ -1510,6 +1526,18 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
 
             std::shared_ptr<ov::Model> model;
             if (!imported && ggml_openvino_model_cache_only()) {
+                // No blob is ever written for these (see ggml_openvino_cpu_blob_importable), so the
+                // generic advice to run once without cache-only cannot help. MXFP4 does not use GatherMatmul.
+                const auto is_gather_matmul_moe = [](const ggml_tensor * n) {
+                    return n->op == GGML_OP_MUL_MAT_ID && n->src[0]->type != GGML_TYPE_MXFP4;
+                };
+                if (device == "CPU" &&
+                    std::any_of(cgraph->nodes, cgraph->nodes + cgraph->n_nodes, is_gather_matmul_moe)) {
+                    GGML_LOG_ERROR(
+                        "ggml-openvino: GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY does not work for MoE models on CPU: "
+                        "the CPU plugin cannot import MoE models with this OpenVINO version, so they are not cached\n");
+                    return GGML_STATUS_FAILED;
+                }
                 GGML_LOG_ERROR(
                     "ggml-openvino: missing or incompatible compiled model: %s; run once without "
                     "GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY\n",
@@ -1563,7 +1591,13 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
 
                 // Export to the frontend model cache for next time. Publish the blob first,
                 // then the manifest, so a cache hit only sees fully written artifacts.
-                if (!model_cache_dir.empty() && !model_is_splitted && model_fp != 0) {
+                const bool blob_importable = ggml_openvino_cpu_blob_importable(device, model);
+                if (!blob_importable && !model_cache_dir.empty()) {
+                    GGML_LOG_WARN(
+                        "ggml-openvino: model cache not written: the CPU plugin cannot import MoE models with this "
+                        "OpenVINO version\n");
+                }
+                if (!model_cache_dir.empty() && !model_is_splitted && model_fp != 0 && blob_importable) {
                     try {
                         const std::string blob_tmp = ggml_openvino_model_cache_temp_path(blob_path);
                         const std::string manifest_tmp = ggml_openvino_model_cache_temp_path(manifest_path);
@@ -3337,9 +3371,21 @@ bool save_ggml_tensor_data_to_txt(const ggml_tensor * tensor, const std::string 
     return true;
 }
 
-void print_input_tensor_info(const std::string & name, const ov::Tensor & tensor) {
-    std::cout << "Input name: " << name << ", Input shape: " << tensor.get_shape() << ", Address: " << tensor.data()
-              << '\n';
+void print_input_tensor_info(const std::string & name, const ov::Tensor & input) {
+    // GPU inputs can be device (USM) tensors, whose data() throws; print a host copy of those.
+    const bool is_remote = input.is<ov::RemoteTensor>();
+    ov::Tensor tensor = input;
+    if (is_remote) {
+        tensor = ov::Tensor(input.get_element_type(), input.get_shape());
+        input.copy_to(tensor);
+    }
+    std::cout << "Input name: " << name << ", Input shape: " << tensor.get_shape() << ", Address: ";
+    if (is_remote) {
+        std::cout << "device";
+    } else {
+        std::cout << tensor.data();
+    }
+    std::cout << '\n';
     switch (tensor.get_element_type()) {
     case ov::element::f32: {
         if (name.find("self_kq_mask") == std::string::npos && name.find("KQ_mask") == std::string::npos) {

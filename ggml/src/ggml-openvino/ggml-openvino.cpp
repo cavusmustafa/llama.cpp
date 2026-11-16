@@ -1737,10 +1737,6 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
             !GgmlOvDecoder::is_conv_state_snapshot_writeback(op)) {
             return {false, "GET_ROWS/SET_ROWS with ne[3] != 1 (ne[3]=" + std::to_string(op->ne[3]) + ") is not supported"};
         }
-        if (op->op == GGML_OP_GET_ROWS && ggml_openvino_is_gpu() &&
-            op->src[0]->type == GGML_TYPE_BF16) {
-            return {false, "GET_ROWS with BF16 src0 is not supported on GPU"};
-        }
         if (op->ne[0] == 256 && (op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q5_K ||
                                  op->src[0]->type == GGML_TYPE_Q4_1 || op->src[0]->type == GGML_TYPE_Q5_1)) {
             // These are all f16-arithmetic dequant rounding errors that intermittently exceed the
@@ -1789,6 +1785,12 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         // The result is copied back densely, so an in-place SCALE on a strided view would be written wrongly.
         if (op->view_src != nullptr && !ggml_is_contiguous(op)) {
             return {false, "SCALE in place on a non-contiguous view is not supported"};
+        }
+        break;
+    }
+    case GGML_OP_RMS_NORM: {
+        if (op->type == GGML_TYPE_BF16) {
+            return {false, "RMS_NORM with BF16 type is not supported"};
         }
         break;
     }
@@ -1982,9 +1984,6 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         if (op->src[0] != nullptr && op->src[0]->ne[2] <= 1) {
             return {false, "MUL_MAT_ID with single-expert or empty ne[2] <= 1 (ne[2]=" +
                            std::to_string(op->src[0]->ne[2]) + ") is not supported"};
-        }
-        if (ggml_openvino_is_gpu() && op->src[0] != nullptr && !ggml_is_quantized(op->src[0]->type)) {
-            return {false, "MUL_MAT_ID with non-quantized weights on GPU is not supported"};
         }
         // The GPU plugin's GatherMatmul returns wrong values for the layouts test-backend-ops
         // produces: it builds a rank-4 input layout ([n_used, n_tokens, k, 1]) instead of rank 3

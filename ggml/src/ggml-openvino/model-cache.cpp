@@ -370,7 +370,10 @@ uint64_t ggml_openvino_model_fingerprint(const ggml_cgraph * cgraph,
     // Version 3 includes dense Q8_0/Q5_1 requantization in q4_asym64_all.
     // Version 4 uses GatedDeltaNet output 1 for snapshots in snapshot mode; older
     // graphs use the incompatible three-output contract.
-    h = fnv1a_u64(h, 4);
+    // Version 5 requantizes K-quant MoE experts to Q4_1_64 on GPU by default.
+    // Version 6 clears recurrent-cache slots with Select, so a NaN in a cleared slot does not survive.
+    // Version 7 reads ROPE frequency factors named other than rope_freqs.weight as a Constant, not a Parameter.
+    h = fnv1a_u64(h, 7);
     h = fnv1a(h, graph_signature.data(), graph_signature.size());
     for (const char * name : cache_settings) {
         const char * value = ggml_openvino_getenv_str(name, "");

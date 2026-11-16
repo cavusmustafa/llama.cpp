@@ -10,14 +10,20 @@
 #include <openvino/op/bitwise_and.hpp>
 #include <openvino/op/bitwise_right_shift.hpp>
 #include <openvino/op/clamp.hpp>
+#include <openvino/op/constant.hpp>
 #include <openvino/op/concat.hpp>
 #include <openvino/op/convert.hpp>
 #include <openvino/op/cos.hpp>
 #include <openvino/op/divide.hpp>
 #include <openvino/op/gather.hpp>
+#include <openvino/op/greater_eq.hpp>
+#include <openvino/op/less.hpp>
+#include <openvino/op/logical_or.hpp>
 #include <openvino/op/maximum.hpp>
 #include <openvino/op/multiply.hpp>
+#include <openvino/op/range.hpp>
 #include <openvino/op/reshape.hpp>
+#include <openvino/op/select.hpp>
 #include <openvino/op/shape_of.hpp>
 #include <openvino/op/sin.hpp>
 #include <openvino/op/slice.hpp>
@@ -576,6 +582,30 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                             std::vector<int64_t>{int64_t(view[2]), int64_t(view[3])})}, 0);
                     return std::make_shared<ov::op::v1::Reshape>(sliced, shape, false);
                 }
+            }
+        }
+    }
+
+    // A row range of a 2D weight (BERT's token type row): slice the rows of the [rows, row_size] Constant
+    if (view_input_size == 1 && input.get_partial_shape().rank().is_static() &&
+        input.get_partial_shape().rank().get_length() == 2 &&
+        ov::is_type<ov::op::v0::Constant>(input.get_node_shared_ptr())) {
+        const auto view = context.get_view_input_ggml_shape(input_index, 0);
+        const auto source = context.get_view_input_src_ggml_shape(input_index, 0);
+        const auto view_stride = context.get_view_input_stride(input_index, 0);
+        const auto source_stride = context.get_view_input_src_stride(input_index, 0);
+        const size_t offset = context.get_view_input_offset(input_index, 0);
+        const size_t source_offset = context.get_view_input_src_offset(input_index, 0);
+        if (view.size() == 4 && source.size() == 4 && view[0] == 1 && view[1] == 1 && view[3] == source[3] &&
+            view_stride.size() == 4 && source_stride.size() == 4 && view_stride[2] == source_stride[2] &&
+            source_stride[2] > 0 && offset >= source_offset && (offset - source_offset) % source_stride[2] == 0) {
+            const int64_t begin = (offset - source_offset) / source_stride[2];
+            if (begin + int64_t(view[2]) <= int64_t(source[2])) {
+                return std::make_shared<ov::op::v8::Slice>(
+                    input, ov::op::v0::Constant::create(ov::element::i64, {1}, {begin}),
+                    ov::op::v0::Constant::create(ov::element::i64, {1}, {begin + int64_t(view[2])}),
+                    ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
+                    ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
             }
         }
     }
@@ -1268,6 +1298,37 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
     }
 
     return current;
+}
+
+bool is_recurrent_cache_reset_case(const NodeContext & context) {
+    return context.get_op_case() == 1 && context.has_input("cache_rs_reset_len");
+}
+
+OutputVector translate_recurrent_cache_reset(const NodeContext & context) {
+    auto cache_rs = context.get_input(0);
+    auto cache_rs_reset_idx = context.get_input("cache_rs_reset_idx");
+    auto cache_rs_reset_len = context.get_input("cache_rs_reset_len");
+
+    auto cache_shape = std::make_shared<ov::op::v3::ShapeOf>(cache_rs, ov::element::i64);
+    auto n_slots_1d = std::make_shared<ov::op::v8::Gather>(
+        cache_shape, ov::op::v0::Constant::create(ov::element::i64, ov::Shape{1}, {2}),
+        ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {0}));
+    auto n_slots = std::make_shared<ov::op::v0::Squeeze>(n_slots_1d);
+
+    auto iota = std::make_shared<ov::op::v4::Range>(
+        ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {0}), n_slots,
+        ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {1}), ov::element::i64);
+
+    auto idx_plus_len = std::make_shared<ov::op::v1::Add>(cache_rs_reset_idx, cache_rs_reset_len);
+    auto less_than_idx = std::make_shared<ov::op::v1::Less>(iota, cache_rs_reset_idx);
+    auto greater_equal_idx_plus_len = std::make_shared<ov::op::v1::GreaterEqual>(iota, idx_plus_len);
+    auto keep_mask = std::make_shared<ov::op::v1::LogicalOr>(less_than_idx, greater_equal_idx_plus_len);
+    auto keep_mask_reshape = std::make_shared<ov::op::v0::Unsqueeze>(
+        keep_mask, ov::op::v0::Constant::create(ov::element::i64, ov::Shape{1}, {1}));
+
+    auto zero = ov::op::v0::Constant::create(cache_rs.get_element_type(), ov::Shape{}, {0});
+    auto cleared_cache_rs = std::make_shared<ov::op::v1::Select>(keep_mask_reshape, cache_rs, zero);
+    return rename_outputs_with_suffix({cleared_cache_rs}, context.get_name());
 }
 
 }  // namespace ggml

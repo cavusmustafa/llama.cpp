@@ -124,7 +124,8 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::sh
 
 namespace {
 bool is_inplace_op(const ggml_tensor * node) {
-    return node->op == GGML_OP_SET_ROWS || node->op == GGML_OP_CPY || (node->op == GGML_OP_SCALE && node->view_src);
+    const bool is_scale_or_fill = node->op == GGML_OP_SCALE || node->op == GGML_OP_FILL;
+    return node->op == GGML_OP_SET_ROWS || node->op == GGML_OP_CPY || (is_scale_or_fill && node->view_src);
 }
 
 bool is_same_shape(const ggml_tensor * a, const ggml_tensor * b) {
@@ -338,6 +339,10 @@ void GgmlOvDecoder::set_input_output() {
             auto src_name = get_tensor_ov_name(m_cgraph, src);
             if (src->flags & GGML_TENSOR_FLAG_INPUT) {
                 src_name = get_tensor_graph_input_ov_name(this, m_cgraph, src, node);
+            }
+            // Same name as in create_weight_nodes(), so ROPE reads the weight Constant.
+            if (is_rope_freqs_weight(src->view_src ? src->view_src : src, node)) {
+                src_name = "rope_freqs.weight";
             }
             current_node_info.node_inputs[src_name] = src;
             current_node_info.node_inputs_names.push_back(src_name);
@@ -846,7 +851,8 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
         }
         break;
     }
-    case GGML_OP_SCALE: {
+    case GGML_OP_SCALE:
+    case GGML_OP_FILL: {
         if (node->view_src && node->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY) {
             op_case = 1;
         }
@@ -1302,7 +1308,7 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             compute_params.rs_writebacks[get_tensor_ov_name(cgraph, node)] = writeback;
             compute_params.s_copy_active_slot_len = dest->ne[3];
         }
-        if (node->op == GGML_OP_SCALE && node->view_src != nullptr && is_recurrent_cache(node->view_src)) {
+        if (is_recurrent_cache_reset(node)) {
             if (model_params.n_rs_slots == -1) {
                 model_params.n_rs_slots = node->view_src->ne[1];
             } else {
@@ -1670,7 +1676,7 @@ void GgmlOvDecoder::add_extra_inputs() {
         // Whether/which cache slot to reset varies per compute call (e.g. a new sequence starting
         // vs. continued decoding). can_reuse_statically() does not invalidate the cached static
         // model on ComputeParams changes, so these must stay runtime Parameters even when static
-        // (scale.cpp op_case 1 only uses them in value comparisons, never as Slice bounds, so this
+        // (translate_recurrent_cache_reset only uses them in value comparisons, never as Slice bounds, so this
         // does not reintroduce dynamic shapes).
         create_1d_input("cache_rs_reset_idx", m_compute_params.cache_rs_reset_idx, /*force_parameter=*/true);
         create_1d_input("cache_rs_reset_len", m_compute_params.cache_rs_reset_len, /*force_parameter=*/true);
@@ -1824,6 +1830,13 @@ void GgmlOvDecoder::compute_model_inputs() {
             if (src->flags & GGML_TENSOR_FLAG_INPUT) {
                 src_name = get_tensor_graph_input_ov_name(this, m_cgraph, src, node);
             }
+            // ROPE frequency factors (rope_factors_short/long in Phi-3, Phi-4 and MiniCPM) are registered as
+            // "rope_freqs.weight" in create_weight_nodes(). Without the same name here they become a
+            // Parameter fed from the host weight buffer, which is empty in cache-only mode and after
+            // GGML_OPENVINO_RELEASE_WEIGHTS.
+            if (is_rope_freqs_weight(src->view_src ? src->view_src : src, node)) {
+                src_name = "rope_freqs.weight";
+            }
             if (m_model_weights.find(src_name) != m_model_weights.end()) {
                 continue;
             }
@@ -1897,7 +1910,7 @@ void GgmlOvDecoder::compute_model_outputs() {
         }
         const bool runtime_recurrent_write = !m_naive && is_recurrent_cache(cur_node->view_src) &&
                                               ::is_inplace_op(cur_node) &&
-                                              (cur_node->op == GGML_OP_SCALE || !m_is_static);
+                                              (is_recurrent_cache_reset(cur_node) || !m_is_static);
         if (::is_inplace_op(cur_node) && ggml_nbytes(cur_node) == 0 && !runtime_recurrent_write) {
             continue;
         }
@@ -2664,7 +2677,7 @@ std::string GgmlOvDecoder::get_inplace_op_src(int node_idx) const {
     // Reset lengths (also in static mode) and dynamic remainder views can become nonempty
     // after compilation. Keep their alias updates in the translated cache chain.
     const bool runtime_recurrent_write = !m_naive && is_recurrent_cache(node->view_src) &&
-                                          (node->op == GGML_OP_SCALE || !m_is_static);
+                                          (is_recurrent_cache_reset(node) || !m_is_static);
     if (!::is_inplace_op(node) || node->view_src == nullptr ||
         (ggml_nbytes(node) == 0 && !runtime_recurrent_write)) {
         return "";
@@ -2786,7 +2799,9 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                     m_node_dynamic_dims[src] = 1;
                     continue;
                 }
-                if (node->op == GGML_OP_VIEW && src->op == GGML_OP_NONE && !is_stateful() && !m_model_is_splitted) {
+                // a view of a model weight (BERT's token type row) has no token dim
+                if (node->op == GGML_OP_VIEW && src->op == GGML_OP_NONE && !is_stateful() && !m_model_is_splitted &&
+                    !(src->buffer != nullptr && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS)) {
                     m_node_dynamic_dims[src] = 1;
                     continue;
                 }
