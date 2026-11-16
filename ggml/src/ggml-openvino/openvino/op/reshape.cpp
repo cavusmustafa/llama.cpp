@@ -29,8 +29,17 @@ OutputVector translate_reshape(const NodeContext & context) {
     std::vector<int64_t> shape(output_shape.begin(), output_shape.end());
     std::shared_ptr<ov::Node> new_shape_node;
     switch (op_case) {
-    case 0:
+    case 0: {
+        // Keep the token-dependent axis dynamic. Baking the captured token count breaks any
+        // reshape that is later replayed with a different one, such as the two reshapes around
+        // the blockwise Hadamard rotation ([T, K] <-> [T * K / block, block]).
+        const int32_t dyn = context.get_op_dynamic_dim();  // ggml axis, -1 if none
+        const int ov_axis = dyn == -1 ? -1 : static_cast<int>(shape.size()) - 1 - dyn;
+        if (ov_axis >= 0 && ov_axis < static_cast<int>(shape.size())) {
+            shape[ov_axis] = -1;
+        }
         break;
+    }
     case 1:
     case 9:
         shape[1] = -1;
@@ -69,6 +78,21 @@ OutputVector translate_reshape(const NodeContext & context) {
         break;
     case 8:
         shape[0] = -1;
+        break;
+    case 10:
+        if (context.has_input("s_copy_active_slot_len")) {
+            new_shape_node = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{
+                context.get_input("s_copy_active_slot_len"),
+                ov::op::v0::Constant::create(ov::element::i64, {3},
+                    std::vector<int64_t>{-1, shape[2], shape[3]})}, 0);
+        } else {
+            shape[1] = -1;
+        }
+        break;
+    case 11:
+        // ROPE positions keep the layout of inp_pos. gemma-4 reshapes the positions of its output rows, and a
+        // batch can have no output rows, so the size checks of the other cases cannot place the dim.
+        shape = {1, 1, 1, -1};
         break;
     default:
         FRONT_END_OP_CONVERSION_CHECK(false, "Unsupported RESHAPE case: ", op_case);
