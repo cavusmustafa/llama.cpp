@@ -967,6 +967,8 @@ size_t ggml_openvino_u2_group_size(ggml_type type) {
     switch (type) {
     case GGML_TYPE_Q2_0:
         return 64;
+    case GGML_TYPE_PQ2_0:
+        return 128;
     default:
         return 0;
     }
@@ -1256,6 +1258,7 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
         break;
 
     case GGML_TYPE_Q2_0:
+    case GGML_TYPE_PQ2_0:
         // Codes {0,1,2,3} dequantized as (code - 1) * scale. The zero point is the same for every
         // block, so make_int2_weights emits it as a scalar and no zp array is stored here
         // (is_symmetric only means "no per-block zp" in this layout).
