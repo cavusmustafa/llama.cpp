@@ -59,9 +59,6 @@ void unpack_32_4(const uint8_t * data, uint8_t * dst) {
 }
 
 constexpr size_t Q2_0_BLOCK_SIZE = 64;  // QK2_0
-#ifdef GGML_OPENVINO_HAS_PQ2_0
-constexpr size_t PQ2_0_BLOCK_SIZE = 128;  // QK_PQ2_0
-#endif
 
 constexpr size_t MXFP4_BLOCK_SIZE = 32;
 constexpr size_t MXFP4_BLOCK_QS_SIZE = MXFP4_BLOCK_SIZE / 2;
@@ -95,7 +92,7 @@ void extract_mxfp4_data(const ggml_tensor * tensor, ov::Tensor & weights_arr, ov
     });
 }
 
-// Extracts (weight, scales) from Q2_0 (group 64) and PQ2_0 (group 128) tensors.
+// Extracts (weight, scales) from 2-bit tensors loaded as u2 (see ggml_openvino_u2_group_size).
 // Data layout is: |16 bit scale|group x 2bit codes|, code j at bits [2*(j%4), +1] of byte j/4.
 // OpenVINO packs u2 the same way, so the codes are copied as they are; they stay in the
 // {0,1,2,3} encoding and make_int2_weights subtracts the scalar zero point of 1.
@@ -204,19 +201,22 @@ void extract_q4_1_data(const ggml_tensor * tensor,
         });
     } else {
         auto * zp = static_cast<uint8_t *>(zp_arr.data());
-        ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
-            float scale = static_cast<float>(ov::float16::from_bits(*((uint16_t *) (data + i * bytes_per_block))));
-            float min = static_cast<float>(ov::float16::from_bits(*((uint16_t *) (data + i * bytes_per_block + 2))));
-            scales[i] = ov::float16(scale);
-            // zp = -min / scale (bias = min, so zp = -bias/scale)
-            uint8_t zp_val = (scale != 0.0f) ? (uint8_t) std::round(-min / scale) : 0;
-            // Pack two 4-bit zero points per byte
-            if (i % 2 == 0) {
-                zp[i / 2] = zp_val & 0x0F;   // Lower nibble
-            } else {
-                zp[i / 2] |= (zp_val << 4);  // Upper nibble
+        const size_t n_blocks = scales_arr.get_size();
+        // One iteration per zero point byte: the two blocks that share a byte are packed together, so no two
+        // threads write the same byte.
+        ov::parallel_for((n_blocks + 1) / 2, [&](size_t pair) {
+            uint8_t packed = 0;
+            for (size_t i = 2 * pair; i < std::min(2 * pair + 2, n_blocks); i++) {
+                float scale = static_cast<float>(ov::float16::from_bits(*((uint16_t *) (data + i * bytes_per_block))));
+                float min =
+                    static_cast<float>(ov::float16::from_bits(*((uint16_t *) (data + i * bytes_per_block + 2))));
+                scales[i] = ov::float16(scale);
+                // zp = -min / scale (bias = min, so zp = -bias/scale), in the u4 range
+                const uint8_t zp_val = (scale != 0.0f) ? (uint8_t) std::clamp(std::lround(-min / scale), 0L, 15L) : 0;
+                packed |= (i % 2 == 0) ? zp_val : (uint8_t) (zp_val << 4);
+                unpack_32_4(data + i * bytes_per_block + 4, weights + i * 16);
             }
-            unpack_32_4(data + i * bytes_per_block + 4, weights + i * 16);
+            zp[pair] = packed;
         });
     }
 }
@@ -309,7 +309,7 @@ void extract_q5_1_data(const ggml_tensor * tensor,
             float min = static_cast<float>(ov::float16::from_bits(read_u16(block + 2)));
             scales[i] = ov::float16(scale);
             // zp = -min / scale (dequant: (w - zp) * s == w*s + min)
-            zp[i] = (scale != 0.0f) ? (uint8_t) std::lround(-min / scale) : 0;
+            zp[i] = (scale != 0.0f) ? (uint8_t) std::clamp(std::lround(-min / scale), 0L, 255L) : 0;
             unpack_block(block, weights + i * qk);
         });
     }
@@ -428,7 +428,9 @@ void extract_q4_k_data(const ggml_tensor * tensor,
                 bias_f16[i * 8 + j] = ov::float16(-min_vals[j]);
             } else {
                 // zp = min / scale (since bias = -min and zp = -bias/scale)
-                uint8_t zp_val = (scale_vals[j] != 0.0f) ? (uint8_t) std::round(min_vals[j] / scale_vals[j]) : 0;
+                uint8_t zp_val = (scale_vals[j] != 0.0f) ?
+                                     (uint8_t) std::clamp(std::lround(min_vals[j] / scale_vals[j]), 0L, 15L) :
+                                     0;
                 // Pack two 4-bit zero points per byte
                 size_t idx = i * 8 + j;
                 if (idx % 2 == 0) {
@@ -812,10 +814,28 @@ ov::Output<ov::Node> make_int4_weights(ov::Tensor & weight,
     return std::make_shared<ov::op::v0::Convert>(result, ov::element::f32);
 }
 
-// Builds the decompression chain for ternary u2 weights: (code - 1) * scale, grouped along
-// the last axis. The zero point is one scalar for the whole tensor, and it is emitted as an
-// f16 Constant rather than a Convert of an integer one, so it stays a constant for the
-// consumers that read it directly (the GPU plugin's ternary FullyConnected kernel).
+// True if any u2 code is 3, i.e. the weights are not ternary {-1, 0, +1}.
+bool u2_has_code_3(const ov::Tensor & weight) {
+    const auto * data = static_cast<const uint8_t *>(weight.data());
+    const size_t size = weight.get_byte_size();
+    constexpr size_t chunk = 1 << 16;
+    std::atomic<bool> found{false};
+    ov::parallel_for((size + chunk - 1) / chunk, [&](size_t c) {
+        uint8_t acc = 0;
+        for (size_t i = c * chunk; i < std::min(size, (c + 1) * chunk); ++i) {
+            acc |= data[i] & (data[i] >> 1);
+        }
+        if (acc & 0x55) {
+            found.store(true, std::memory_order_relaxed);
+        }
+    });
+    return found.load();
+}
+
+// Builds the decompression chain for u2 weights: (code - 1) * scale, grouped along the last axis.
+// The zero point is one scalar for the whole tensor. Ternary weights at group 128 get it as an f16
+// Constant, which the GPU plugin's ternary FullyConnected kernel requires; all others get a Convert
+// of an integer one, which oneDNN's u2 matmul requires.
 ov::Output<ov::Node> make_int2_weights(ov::Tensor & weight, ov::Tensor & scales, size_t group_size) {
     const ov::Shape orig_weight_shape = weight.get_shape();
     GGML_ASSERT(!orig_weight_shape.empty());
@@ -834,7 +854,11 @@ ov::Output<ov::Node> make_int2_weights(ov::Tensor & weight, ov::Tensor & scales,
     weights_node->get_rt_info()["__gguf_tensor_holder"] = weight;
     auto weights_f16 = std::make_shared<ov::op::v0::Convert>(weights_node, ov::element::f16);
 
-    auto zero_point = ov::op::v0::Constant::create(ov::element::f16, ov::Shape{}, {1.0f});
+    ov::Output<ov::Node> zero_point = ov::op::v0::Constant::create(ov::element::f16, ov::Shape{}, {1.0f});
+    if (group_size != 128 || u2_has_code_3(weight)) {
+        zero_point = std::make_shared<ov::op::v0::Convert>(
+            ov::op::v0::Constant::create(ov::element::u8, ov::Shape{}, {1}), ov::element::f16);
+    }
     auto w_zp = std::make_shared<ov::op::v1::Subtract>(weights_f16, zero_point, ov::op::AutoBroadcastType::NUMPY);
 
     auto scales_f16 = std::make_shared<ov::op::v0::Constant>(scales);
@@ -1155,16 +1179,7 @@ std::shared_ptr<ov::Node> extract_quantized_weights(const ggml_tensor * tensor,
         return result;
     }
 
-    size_t group_size_2bit = 0;
-    if (tensor->type == GGML_TYPE_Q2_0) {
-        group_size_2bit = Q2_0_BLOCK_SIZE;
-    }
-#ifdef GGML_OPENVINO_HAS_PQ2_0
-    if (tensor->type == GGML_TYPE_PQ2_0) {
-        group_size_2bit = PQ2_0_BLOCK_SIZE;
-    }
-#endif
-    if (group_size_2bit != 0) {
+    if (const size_t group_size_2bit = ggml_openvino_u2_group_size(tensor->type)) {
         extract_2bit_data(&temp_tensor, group_size_2bit, weights, scales);
         const size_t group_size = ggml_nelements(tensor) / scales.get_size();
         auto result = make_int2_weights(weights, scales, group_size).get_node_shared_ptr();

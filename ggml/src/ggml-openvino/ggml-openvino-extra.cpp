@@ -179,6 +179,9 @@ constexpr env_var env_vars[] = {
     {"GGML_OPENVINO_RELEASE_WEIGHTS", env_type::BOOL},
     {"GGML_OPENVINO_REDUCE_COMPILE_MEM", env_type::BOOL},
     {"GGML_OPENVINO_LOG_UNSUPPORTED_OPS", env_type::BOOL},
+    {"GGML_OPENVINO_LOG_SUPPORTS_OP", env_type::INT},
+    {"GGML_OPENVINO_DIAG_GRAPH_IO", env_type::BOOL},
+    {"GGML_OPENVINO_ROPE_F32_ANGLE", env_type::BOOL},
     {"GGML_OPENVINO_LOG_SWA_LAYERS", env_type::BOOL},
     {"GGML_OPENVINO_NATIVE_SOFTPLUS", env_type::BOOL},
     {"GGML_OPENVINO_DISABLE_REMOTE_OUTPUTS", env_type::BOOL},
@@ -543,6 +546,14 @@ std::string ggml_openvino_config_overrides_in_use() {
     return value ? std::string(name) + "=" + value : std::string();
 }
 
+bool ggml_openvino_manual_gqa_enabled() {
+    // set: a positive value enables it, 0 disables it; unset: on GPU only
+    if (ggml_openvino_getenv_str("GGML_OPENVINO_MANUAL_GQA_ATTN") != nullptr) {
+        return ggml_openvino_getenv_int("GGML_OPENVINO_MANUAL_GQA_ATTN") > 0;
+    }
+    return ggml_openvino_is_gpu();
+}
+
 bool ggml_openvino_gdn_prescale_enabled() {
     // float value, so not getenv_int: "64.0" must enable it. Unset means on.
     const char * v = ggml_openvino_getenv_str("GGML_OPENVINO_GDN_Q_SCALE", nullptr);
@@ -614,6 +625,10 @@ bool ggml_openvino_release_weights_enabled() {
 // Check if running on NPU
 bool ggml_openvino_is_npu() {
     return ggml_openvino_get_device_config().is_npu;
+}
+
+bool ggml_openvino_is_static() {
+    return ggml_openvino_is_npu() || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC");
 }
 
 bool ggml_openvino_is_gpu() {
@@ -948,22 +963,26 @@ clEnqueueMemcpyINTEL_fn ggml_openvino_get_clEnqueueMemcpyINTEL() {
     return ggml_openvino_get_device_config().cl_mem_cpy_fn;
 }
 
+size_t ggml_openvino_u2_group_size(ggml_type type) {
+    switch (type) {
+    case GGML_TYPE_Q2_0:
+        return 64;
+    default:
+        return 0;
+    }
+}
+
 // Get requantization type for a tensor type (returns nullopt if no requant needed)
 std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor * tensor, bool no_requant) {
     if (no_requant) {
         return std::nullopt;
     }
-    // Ternary weights are already at 2 bits and OpenVINO carries them natively as u2. Every
-    // requant target here is 4 bit or wider, so it would inflate them and also lose the ternary
-    // FullyConnected path, which is the only one that applies a fused Hadamard input transform.
-    if (tensor->type == GGML_TYPE_Q2_0) {
+    // 2-bit weights are carried natively as u2. Every requant target here is 4 bit or wider, so it
+    // would inflate them and also lose the ternary FullyConnected path, which is the only one that
+    // applies a fused Hadamard input transform.
+    if (ggml_openvino_u2_group_size(tensor->type) != 0) {
         return std::nullopt;
     }
-#ifdef GGML_OPENVINO_HAS_PQ2_0
-    if (tensor->type == GGML_TYPE_PQ2_0) {
-        return std::nullopt;
-    }
-#endif
     if (strncmp(tensor->name, "token_embd.weight", 17) == 0) {
         if (ggml_openvino_is_npu()) {
             if (auto npu_type = ggml_openvino_npu_token_embd_requant_type(tensor)) {
@@ -1004,6 +1023,10 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
     const bool sym128_all = is_opt("q4_sym128_all");
     const bool asym64_all = is_opt("q4_asym64_all");
     const bool asym64 = is_opt("q4_asym64");
+    // A group of 64 must fit within each row; other widths keep channel-wise INT8.
+    auto group64 = [tensor](ExtraQuantType type) {
+        return tensor->ne[0] % 64 == 0 ? type : ExtraQuantType::Q8_0_C;
+    };
 
     // TODO: temporary workaround for slow GPU-plugin GatherMatmul prefill above 16 tokens.
     // Q4_1_64 experts let the plugin fuse the MoE into MOECompressed.
@@ -1028,8 +1051,7 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
         return tensor->ne[0] % 64 == 0 ? ExtraQuantType::Q4_1_64 : ExtraQuantType::Q8_0_C;
     }
     if (tensor->type == GGML_TYPE_Q5_0) {
-        //return ExtraQuantType::Q4_0_128;
-        return ExtraQuantType::Q4_0_64;
+        return group64(ExtraQuantType::Q4_0_64);
     }
     // MoE expert weights (3D, ne[2] = n_expert) stored as Q5_1/Q8_0 are the expert-side
     // equivalent of Q6_K/Q5_K: kept at 8 bits by default while the rest of the model is at 4
@@ -1038,10 +1060,10 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
     // (704/64 = 11) and 128 does not.
     if (tensor->ne[2] > 1 && (tensor->type == GGML_TYPE_Q5_1 || tensor->type == GGML_TYPE_Q8_0)) {
         if (sym128 || sym128_all) {
-            return ExtraQuantType::Q4_0_64;
+            return group64(ExtraQuantType::Q4_0_64);
         }
         if (asym64 || asym64_all) {
-            return ExtraQuantType::Q4_1_64;
+            return group64(ExtraQuantType::Q4_1_64);
         }
         // TODO: temporary workaround for a known OpenVINO GPU-plugin bug -- remove once the
         // plugin computes grouped 8-bit GatherMatmulCompressed correctly. This costs accuracy
@@ -1056,7 +1078,7 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
         // avoids the broken layout and restores correct output.
         // Opt out with GGML_OPENVINO_REQUANT_KQUANT=native.
         if (ggml_openvino_is_gpu() && !is_opt("native")) {
-            return ExtraQuantType::Q4_0_64;
+            return group64(ExtraQuantType::Q4_0_64);
         }
     }
     switch (tensor->type) {
@@ -1234,22 +1256,13 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
         break;
 
     case GGML_TYPE_Q2_0:
-        // Ternary: codes {0,1,2} dequantized as (code - 1) * scale. The zero point is the
-        // same for every block, so make_int2_weights emits it as a scalar and no zp array
-        // is stored here (is_symmetric only means "no per-block zp" in this layout).
+        // Codes {0,1,2,3} dequantized as (code - 1) * scale. The zero point is the same for every
+        // block, so make_int2_weights emits it as a scalar and no zp array is stored here
+        // (is_symmetric only means "no per-block zp" in this layout).
         layout.is_u2 = true;
-        layout.weights_per_block = 64;
+        layout.weights_per_block = ggml_openvino_u2_group_size(tensor->type);
         layout.is_symmetric = true;
         break;
-
-#ifdef GGML_OPENVINO_HAS_PQ2_0
-    case GGML_TYPE_PQ2_0:
-        // Same codec as Q2_0 at group 128.
-        layout.is_u2 = true;
-        layout.weights_per_block = 128;
-        layout.is_symmetric = true;
-        break;
-#endif
 
     default:
         // Unsupported quantization type

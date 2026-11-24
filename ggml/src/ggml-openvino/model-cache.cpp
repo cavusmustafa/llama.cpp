@@ -186,6 +186,7 @@ static const char * cache_settings[] = {
     "GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK",
     "GGML_OPENVINO_KV_SCATTER_ELEMENTS",
     "GGML_OPENVINO_DISABLE_ELTWISE_RANK_ALIGN",
+    "GGML_OPENVINO_ROPE_F32_ANGLE",
 };
 
 void ggml_openvino_model_cache_init() {
@@ -197,8 +198,7 @@ void ggml_openvino_model_cache_init() {
         }
         return;
     }
-    if (cache_only && (ggml_openvino_is_npu() || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC") ||
-                       ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_CACHE") ||
+    if (cache_only && (ggml_openvino_is_static() || ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_CACHE") ||
                        ggml_openvino_getenv_int("GGML_OPENVINO_ENABLE_FALLBACK"))) {
         GGML_ABORT("ggml-openvino: cache-only mode requires dynamic CPU/GPU execution with caching and without fallback");
     }
@@ -313,7 +313,7 @@ uint64_t ggml_openvino_source_fingerprint(const void * data, size_t size, std::v
         return fnv1a_u64(m->identity, m->offset + reinterpret_cast<uintptr_t>(data) - m->begin);
     }
     // A small weight outside any file mapping is one the model loader built in memory rather than
-    // read from the GGUF (e.g. the PQ2_0 models' Hadamard matrix). It is deterministic, and the
+    // read from the GGUF (e.g. the Bonsai 2 Hadamard matrix). It is deterministic, and the
     // export run already identified it by the content hash below, so cache-only mode can too. Only
     // large unmapped weights mean the model itself was not mmap-loaded.
     constexpr size_t MAX_UNMAPPED_WEIGHT_BYTES = 64u << 20;
@@ -373,7 +373,9 @@ uint64_t ggml_openvino_model_fingerprint(const ggml_cgraph * cgraph,
     // Version 5 requantizes K-quant MoE experts to Q4_1_64 on GPU by default.
     // Version 6 clears recurrent-cache slots with Select, so a NaN in a cleared slot does not survive.
     // Version 7 reads ROPE frequency factors named other than rope_freqs.weight as a Constant, not a Parameter.
-    h = fnv1a_u64(h, 7);
+    // Version 8 drops result_norm from the outputs when it has a consumer, and hashes the output flags.
+    // Version 9 hashes GGML_OPENVINO_ROPE_F32_ANGLE, which became opt-in.
+    h = fnv1a_u64(h, 9);
     h = fnv1a(h, graph_signature.data(), graph_signature.size());
     for (const char * name : cache_settings) {
         const char * value = ggml_openvino_getenv_str(name, "");
@@ -396,6 +398,8 @@ uint64_t ggml_openvino_model_fingerprint(const ggml_cgraph * cgraph,
         const ggml_tensor * node = cgraph->nodes[i];
         h = fnv1a_u64(h, static_cast<uint64_t>(node->op));
         h = fnv1a(h, node->name, strlen(node->name));
+        // Each output is a Result of the model; llama_set_embeddings_layer_inp() changes only the flags.
+        h = fnv1a_u64(h, (node->flags & GGML_TENSOR_FLAG_OUTPUT) ? 1u : 0u);
         has_gdn = has_gdn || node->op == GGML_OP_GATED_DELTA_NET;
     }
     if (has_gdn && ggml_openvino_is_npu()) {
@@ -551,8 +555,10 @@ static bool read_weights_hash(const std::string & path, uint64_t & hash) {
     std::string key, value;
     while (meta >> key >> value) {
         if (key == "hash") {
-            hash = std::stoull(value, nullptr, 16);
-            return true;
+            // a damaged record counts as no hash, so the caller rewrites the file
+            char * end = nullptr;
+            hash = std::strtoull(value.c_str(), &end, 16);
+            return end != value.c_str() && *end == '\0';
         }
     }
     return false;

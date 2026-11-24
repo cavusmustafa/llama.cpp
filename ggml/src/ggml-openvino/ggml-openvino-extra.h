@@ -134,6 +134,9 @@ bool ggml_openvino_release_weights_enabled();
 // Check if running on NPU
 bool ggml_openvino_is_npu();
 
+// Static graphs: NPU, or any device with GGML_OPENVINO_FORCE_STATIC
+bool ggml_openvino_is_static();
+
 // KV-cache slicing: bind the KV cache, and size the KQ masks, at the attended length instead of the full context.
 // One mechanism, two modes:
 //   dynamic graphs (CPU/GPU): the KV input is a view over the cache; the graph is not recompiled.
@@ -203,6 +206,9 @@ bool ggml_openvino_is_gpu();
 // Read n_seq_active and attention_size(_swa) from the KQ mask shape (off with GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK=1)
 bool ggml_openvino_shape_from_mask_enabled();
 
+// Manual GQA attention instead of SDPA (GGML_OPENVINO_MANUAL_GQA_ATTN, on GPU by default)
+bool ggml_openvino_manual_gqa_enabled();
+
 // GDN q pre-scale for eligible graphs on the NPU static path. On by default;
 // GGML_OPENVINO_GDN_Q_SCALE=0 (or a negative or non-numeric value) turns it off.
 bool ggml_openvino_gdn_prescale_enabled();
@@ -239,8 +245,12 @@ size_t ggml_openvino_max_alloc_size(const std::string & device);
 // release:  madvise(MADV_DONTNEED) all registered buffers, dropping their RSS.
 // released: true once release has run (used to fail-fast on post-release recompile).
 void ggml_openvino_register_weight_buffer(void * data, size_t size);
+void ggml_openvino_unregister_weight_buffer(const void * data);
 void ggml_openvino_release_weight_buffers();
 bool ggml_openvino_weight_buffers_released();
+
+// Group size of a 2-bit type that is loaded as u2 weights, 0 for other types
+size_t ggml_openvino_u2_group_size(ggml_type type);
 
 // Get requantization type for a tensor type (returns nullopt if no requant needed)
 std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor * tensor, bool no_requant = false);
@@ -319,7 +329,7 @@ struct ggml_openvino_extracted_layout {
     size_t zp_offset = 0;       // Offset to zero points in buffer
     size_t zp_size = 0;         // Size of zero points in bytes (U4 or U8)
     bool is_u4;                 // true for U4 weights, false for U8
-    bool is_u2 = false;         // true for ternary U2 weights (Q2_0, PQ2_0); is_u4 is then false
+    bool is_u2 = false;         // true for 2-bit U2 weights (Q2_0); is_u4 is then false
     int64_t weights_per_block;  // weights per scale/zp block
     bool is_symmetric;          // true for symmetric quantization
 

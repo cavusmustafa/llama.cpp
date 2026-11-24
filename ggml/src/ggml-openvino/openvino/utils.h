@@ -13,41 +13,7 @@ namespace ov {
 namespace frontend {
 namespace ggml {
 
-std::string getCurrentTime();
-
 void num_inputs_check(const NodeContext & context, size_t min_inputs, size_t max_inputs);
-
-int non_cont_dim(std::vector<size_t> ne, std::vector<size_t> nb);
-
-template <typename T> std::vector<int> argsort_descend(const std::vector<T> & v) {
-    std::vector<int> idx(v.size());
-    std::iota(idx.begin(), idx.end(), 0);
-    std::sort(idx.begin(), idx.end(), [&v](int i1, int i2) { return v[i1] > v[i2]; });
-    return idx;
-}
-
-template <typename T> std::vector<T> sorted_descend(std::vector<T> v) {
-    std::sort(v.begin(), v.end(), [](T a, T b) { return a > b; });
-    return v;
-}
-
-template <typename T> bool is_permuted(const std::vector<T> & strides) {
-    for (size_t i = 0; i < strides.size() - 1; ++i) {
-        if (strides[i] < strides[i + 1]) {
-            return true;
-        }
-    }
-    return false;
-}
-
-template <typename T> std::vector<T> permute(const std::vector<T> & x, const std::vector<int> & perm) {
-    std::vector<T> result;
-    result.reserve(perm.size());
-    for (int i : perm) {
-        result.push_back(x[i]);
-    }
-    return result;
-}
 
 std::shared_ptr<ov::Node> get_dimensions(const std::shared_ptr<ov::op::v3::ShapeOf> & shape,
                                          const std::vector<int> & dims);
@@ -67,7 +33,7 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
 // dequantizes only those. Returns nullptr if the subgraph is not such a chain, or is too small to
 // be worth the rewrite. Used for tied embeddings, where the same weight also feeds the lm_head
 // matmul: gathering the dequantized table would give that chain a second consumer and force it to
-// be materialized in full. Also used for ternary u2 tables, which no plugin gathers compressed,
+// be materialized in full. Also used for 2-bit u2 tables, which no plugin gathers compressed,
 // so a plain Gather would fold the whole table to f16 at compile time.
 std::shared_ptr<ov::Node> gather_compressed_rows(const ov::Output<ov::Node> & weights,
                                                  const ov::Output<ov::Node> & indices);
@@ -97,6 +63,9 @@ constexpr const char * GGML_OV_GROUPED_ROWS = "ggml_ov_grouped_rows";
 
 // rt_info key on the stateful V cache read with `-fa off` (permute): V is [.., kv, head_size], not transposed
 constexpr const char * GGML_OV_V_TOKEN_MAJOR = "ggml_ov_v_token_major";
+
+// rt_info key on the packed SSM_SCAN output Concat [1, 1, 1, y | state]; whole-part VIEWs select one Concat input
+constexpr const char * GGML_OV_SSM_SCAN_PACKED = "ggml_ov_ssm_scan_packed";
 
 namespace op {
 template <typename T> OutputVector translate_1to1_match_2_inputs(const NodeContext & context) {
